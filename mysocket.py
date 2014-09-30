@@ -90,16 +90,34 @@ class packet:
         self.tcp_offset_res = (tcp_doff << 4) + 0
         self.tcp_flags = tcp_fin + (tcp_syn << 1) + (tcp_rst << 2) + (tcp_psh <<3) + (tcp_ack << 4) + (tcp_urg << 5)
 
+        # pseudo header fields
+        self.source_address = socket.inet_aton( source_ip )
+        self.dest_address = socket.inet_aton(dest_ip)
+        self.placeholder = 0
+        self.protocol = socket.IPPROTO_TCP
+        self.tcp_length = len(tcp_header) + len(user_data)
+
     def makeIPheader(self):
         # the ! in the pack format string means network order
-        self.ip_header = pack('!BBHHHBBH4s4s' , ip_ihl_ver, ip_tos, ip_tot_len, ip_id, ip_frag_off, ip_ttl, ip_proto, ip_check, ip_saddr, ip_daddr)
+        self.ip_header = pack('!BBHHHBBH4s4s' , self.ip_ihl_ver, self.ip_tos, self.ip_tot_len, self.ip_id, self.ip_frag_off, self.ip_ttl, self.ip_proto, self.ip_check, self.ip_saddr, self.ip_daddr)
+        return self.ip_header
 
     def makeTCPheader(self):
         # the ! in the pack format string means network order
-        self.tcp_header = pack('!HHLLBBHHH' , tcp_source, tcp_dest, tcp_seq, tcp_ack_seq, tcp_offset_res, tcp_flags,  tcp_window, tcp_check, tcp_urg_ptr)
+        # checksum is NOT in network byte order
+        self.tcp_header = pack('!HHLLBBH' , self.tcp_source, self.tcp_dest, self.tcp_seq, self.tcp_ack_seq, self.tcp_offset_res, self.tcp_flags,  self.tcp_window) + pack('H' , self.tcp_check) + pack('!H' , self.tcp_urg_ptr)
+        return self.tcp_header
 
     def createpacket(self):
-        return self.ip_header + self.tcp_header + self.data
+        self.makeTCPheader()
+        self.tcp_length = len(self.tcp_header) + len(self.user_data)
+
+        psh = pack('!4s4sBBH' , self.source_address , self.dest_address , self.placeholder , self.protocol , self.tcp_length);
+        psh = psh + tcp_header + user_data;
+         
+        self.tcp_check = checksum(psh)
+
+        return self.makeIPheader() + self.makeTCPheader() + self.data
 
 # needed for calculation checksum
 def checksum(msg):
