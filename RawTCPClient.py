@@ -1,0 +1,3 @@
+import mysocket
+
+print "test"

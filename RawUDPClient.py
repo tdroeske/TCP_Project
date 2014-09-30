@@ -3,8 +3,8 @@ import socket, sys
 from struct import *
  
 
-source_ip = '72.19.91.64'
-dest_ip = '192.241.166.195'
+source_ip = '128.119.74.85'
+dest_ip = '192.241.166.195'		# Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
  
 #create a raw socket
 try:
@@ -56,8 +56,8 @@ packet = ip_header + udp_header + user_data
 bytes = s.sendto(packet, (dest_ip , 0 ))
 print "Bytes sent: " + str(bytes)
 
-# modifiedMessage, serverAddress = s.recvfrom(4096) # Hangs here
-# print modifiedMessage
+modifiedMessage, serverAddress = s.recvfrom(4096) # Hangs here	# Block ICMP: iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP
+print modifiedMessage
 
 
 
