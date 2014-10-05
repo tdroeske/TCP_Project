@@ -38,7 +38,7 @@ except socket.error , msg:
 # now start constructing the packet
 packet = '';
  
-source_ip = '128.119.73.255'
+source_ip = '72.19.80.135'
 dest_ip = '192.241.166.195'
  
 # ip header fields
