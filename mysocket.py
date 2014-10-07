@@ -1,8 +1,9 @@
 import socket, sys, time
+from random import randint
 from struct import *
  
 # Block ICMP: "iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.81.57 -j DROP"  <-- Use src IP
+# Disable RST Packets: "iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.80.159 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -10,8 +11,8 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.81.57'
-        self.src_port = 1234
+        self.src_ip = '72.19.80.159'
+        self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
         self.timeout = 0
@@ -28,7 +29,7 @@ class mysocket:
     def connect(self, address):
         #create a raw socket
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
         except socket.error , msg:
             print 'Socket could not be created. Error Code : ' + str(msg[0]) + ' Message ' + msg[1]
             sys.exit()
@@ -53,7 +54,7 @@ class mysocket:
     def recvfrom(self, bufsize):
         pass
 
-    def send(self, date):
+    def send(self, data):
         pass
 
     def settimeout(self, value):
@@ -64,57 +65,46 @@ class mysocket:
 
     def __connsetup(self):
         # Send syn packet
-        pack = packet(self.src_ip, self.dest_ip)
-        pack.tcp_dest = self.dest_port
+        pack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
         pack.tcp_syn = 1
+        pack.tcp_seq = randint(0, 2**32)
         pack.createpacket()
-        print self.dest_ip
+        # print self.dest_ip
         bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
-        print bytes
+        # print bytes
 
         # Recieve syn ack packet
         response, addr = self.sock.recvfrom(65535)
-        print response
+        print len(response)
+        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        respPack.extractData(response)
+
 
         # time.sleep(1)
 
 
         # send ack packet
-        # pack.tcp_syn = 0
-        # pack.tcp_ack = 1
-        # pack.tcp_ack_seq = 567
+        pack.tcp_syn = 0
+        pack.tcp_ack = 1
+        pack.tcp_seq +=1
+        pack.tcp_ack_seq = respPack.tcp_seq+1
         # pack.user_data = "Hello World!"
-        # pack.createpacket()
-        # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
-        # print bytes
+        pack.createpacket()
+        bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        print bytes
 
 
 class packet:
 
-    def __init__(self, source_ip, dest_ip):
+    def __init__(self, source_ip, source_port, dest_ip, dest_port):
         self.packet = ""
         self.ip_header = ""
         self.tcp_header = ""
         self.user_data = ""
 
-        # ip header fields
-        self.ip_ver = 4
-        self.ip_ihl = 5
-        self.ip_tos = 0
-        self.ip_tot_len = 0  # kernel will fill the correct total length
-        self.ip_id = 54321
-        self.ip_frag_off = 0
-        self.ip_ttl = 255
-        self.ip_proto = socket.IPPROTO_TCP
-        self.ip_check = 0    # kernel will fill the correct checksum
-        self.ip_saddr = socket.inet_aton (source_ip) 
-        self.ip_daddr = socket.inet_aton (dest_ip)
-        
-        self.ip_ihl_ver = (self.ip_ver << 4) + self.ip_ihl
-
         # tcp header fields
-        self.tcp_source = 1234   # source port
-        self.tcp_dest = 12000   # destination port
+        self.tcp_source = source_port   # source port
+        self.tcp_dest = dest_port   # destination port
         self.tcp_seq = 454
         self.tcp_ack_seq = 0
         self.tcp_doff = 5    #4 bit field, size of tcp header, 5 * 4 = 20 bytes
@@ -134,12 +124,6 @@ class packet:
         self.dest_address = socket.inet_aton(dest_ip)
         self.placeholder = 0
         self.protocol = socket.IPPROTO_TCP
-        
-
-    def makeIPheader(self):
-        # the ! in the pack format string means network order
-        self.ip_header = pack('!BBHHHBBH4s4s' , self.ip_ihl_ver, self.ip_tos, self.ip_tot_len, self.ip_id, self.ip_frag_off, self.ip_ttl, self.ip_proto, self.ip_check, self.ip_saddr, self.ip_daddr)
-        return self.ip_header
 
     def makeTCPheader(self):
         self.tcp_offset_res = (self.tcp_doff << 4) + 0
@@ -162,7 +146,35 @@ class packet:
          
         self.tcp_check = checksum(psh)
 
-        self.packet = self.makeIPheader() + self.makeTCPheader() + self.user_data
+        self.packet = self.makeTCPheader() + self.user_data
+
+    def extractData(self, dataPack):
+        # ipheadlength = (unpack('!B', dataPack[0])[0] << 60) >> 60
+        # print ipheadlength
+        # print (unpack('!B', dataPack[0])[0] >> 4) << 4
+        # print (unpack('!B', dataPack[0])[0] >> 4) << 4 ^ unpack('!B', dataPack[0])[0]
+        self.source_address = socket.inet_ntoa(dataPack[12:16])
+        self.dest_address = socket.inet_ntoa(dataPack[16:20])
+        self.tcp_source =  unpack('!H', dataPack[20:22])[0]
+        self.tcp_dest =  unpack('!H', dataPack[22:24])[0]
+
+        self.tcp_seq = unpack('!L', dataPack[24:28])[0]
+        self.tcp_ack_seq = unpack('!L', dataPack[28:32])[0]
+        self.tcp_doff = unpack('!B', dataPack[32:33])[0] >> 2
+
+        self.tcp_flags = unpack('!B', dataPack[33:34])[0]
+        self.tcp_fin = (self.tcp_flags & 1) != 0
+        self.tcp_syn = (self.tcp_flags & 2) != 0
+        self.tcp_rst = (self.tcp_flags & 4) != 0
+        self.tcp_psh = (self.tcp_flags & 8) != 0
+        self.tcp_ack = (self.tcp_flags & 16) != 0
+        self.tcp_urg = (self.tcp_flags & 32) != 0
+
+        self.tcp_window = unpack('!H', dataPack[34:36])[0]
+        self.tcp_check = unpack('H', dataPack[36:38])[0]
+        self.tcp_urg_ptr = unpack('!H', dataPack[38:40])[0]
+
+
 
 # needed for calculation checksum
 def checksum(msg):
@@ -181,85 +193,3 @@ def checksum(msg):
      
     return s
  
-# #create a raw socket
-# try:
-#     s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
-# except socket.error , msg:
-#     print 'Socket could not be created. Error Code : ' + str(msg[0]) + ' Message ' + msg[1]
-#     sys.exit()
-     
-# # now start constructing the packet
-# packet = '';
- 
-# source_ip = '72.19.80.135'
-# dest_ip = '192.241.166.195'
- 
-# # ip header fields
-# ip_ihl = 5
-# ip_ver = 4
-# ip_tos = 0
-# ip_tot_len = 0  # kernel will fill the correct total length
-# ip_id = 54321   #Id of this packet
-# ip_frag_off = 0
-# ip_ttl = 255
-# ip_proto = socket.IPPROTO_TCP
-# ip_check = 0    # kernel will fill the correct checksum
-# ip_saddr = socket.inet_aton ( source_ip )   #Spoof the source ip address if you want to
-# ip_daddr = socket.inet_aton ( dest_ip )
- 
-# ip_ihl_ver = (ip_ver << 4) + ip_ihl
- 
-# # the ! in the pack format string means network order
-# ip_header = pack('!BBHHHBBH4s4s' , ip_ihl_ver, ip_tos, ip_tot_len, ip_id, ip_frag_off, ip_ttl, ip_proto, ip_check, ip_saddr, ip_daddr)
- 
-# # tcp header fields
-# tcp_source = 1234   # source port
-# tcp_dest = 12000   # destination port
-# tcp_seq = 454
-# tcp_ack_seq = 0
-# tcp_doff = 5    #4 bit field, size of tcp header, 5 * 4 = 20 bytes
-# #tcp flags
-# tcp_fin = 0
-# tcp_syn = 1
-# tcp_rst = 0
-# tcp_psh = 0
-# tcp_ack = 0
-# tcp_urg = 0
-# tcp_window = socket.htons (5840)    #   maximum allowed window size
-# tcp_check = 0
-# tcp_urg_ptr = 0
- 
-# tcp_offset_res = (tcp_doff << 4) + 0
-# tcp_flags = tcp_fin + (tcp_syn << 1) + (tcp_rst << 2) + (tcp_psh <<3) + (tcp_ack << 4) + (tcp_urg << 5)
- 
-# # the ! in the pack format string means network order
-# tcp_header = pack('!HHLLBBHHH' , tcp_source, tcp_dest, tcp_seq, tcp_ack_seq, tcp_offset_res, tcp_flags,  tcp_window, tcp_check, tcp_urg_ptr)
- 
-# user_data = 'Hello, how are you'
- 
-# # pseudo header fields
-# source_address = socket.inet_aton( source_ip )
-# dest_address = socket.inet_aton(dest_ip)
-# placeholder = 0
-# protocol = socket.IPPROTO_TCP
-# tcp_length = len(tcp_header) + len(user_data)
- 
-# psh = pack('!4s4sBBH' , source_address , dest_address , placeholder , protocol , tcp_length);
-# psh = psh + tcp_header + user_data;
- 
-# tcp_check = checksum(psh)
-# tcp_check = checksum(tcp_header + user_data)
-# #print tcp_checksum
- 
-# # make the tcp header again and fill the correct checksum - remember checksum is NOT in network byte order
-# tcp_header = pack('!HHLLBBH' , tcp_source, tcp_dest, tcp_seq, tcp_ack_seq, tcp_offset_res, tcp_flags,  tcp_window) + pack('H' , tcp_check) + pack('!H' , tcp_urg_ptr)
- 
-# # final full packet - syn packets dont have any data
-# packet = ip_header + tcp_header + user_data
- 
-# #Send the packet finally - the port specified has no effect
-# bytes = s.sendto(packet, (dest_ip , 0 )) 
-# print bytes
-
-# response, addr = s.recvfrom(65535)
-# # print response
