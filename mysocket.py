@@ -1,9 +1,10 @@
 import socket, sys, time
 from random import randint
 from struct import *
+import array
  
 # Block ICMP: "iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.80.159 -j DROP"  <-- Use src IP
+# Disable RST Packets: "iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.81.222 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -11,11 +12,14 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.80.159'
+        self.src_ip = '72.19.81.222'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
         self.timeout = 0
+
+        self.currentOutbound = ''
+        self.currentInbound = ''
 
     def accept(self):
         pass
@@ -24,7 +28,34 @@ class mysocket:
         pass
 
     def close(self):
-        pass
+        # send fin packet
+        pack = self.currentOutbound
+        pack.resetflags()
+        pack.tcp_fin = 1;
+        pack.tcp_ack = 1;
+        pack.createpacket()
+        bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        # print bytes
+
+        # receive fin ack packet
+        response, addr = self.sock.recvfrom(65535)
+        print len(response)
+        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        respPack.extractData(response)
+
+        # receive fin packet
+        response, addr = self.sock.recvfrom(65535)
+        print len(response)
+        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        respPack.extractData(response)
+
+        # send ack packet
+        # pack = self.currentOutbound
+        # pack.resetflags()
+        # pack.tcp_fin = 1
+        # pack.tcp_ack = 1
+        # pack.createpacket()
+        # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
 
     def connect(self, address):
         #create a raw socket
@@ -48,14 +79,40 @@ class mysocket:
         pass
 
     def recv(self, bufsize):
-        data = self.recvfrom(bufsize)
-        return data
+         # receive push packet
+        response, addr = self.sock.recvfrom(bufsize)
+        print len(response)
+        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        respPack.extractData(response)
+        self.currentInbound = respPack
+
+        # send push ack packet
+        pack = self.currentOutbound
+        pack.tcp_ack_seq += len(respPack.user_data)
+        pack.resetflags()
+        pack.tcp_psh = 1
+        pack.tcp_ack = 1
+        pack.createpacket()
+        bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+
 
     def recvfrom(self, bufsize):
         pass
 
     def send(self, data):
-        pass
+        # send data
+        pack = self.currentOutbound
+        pack.resetflags()
+        pack.tcp_psh = 1;
+        pack.user_data = data
+        pack.createpacket()
+        bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+
+        # receive ack
+        response, addr = self.sock.recvfrom(65535)
+        print len(response)
+        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        respPack.extractData(response)
 
     def settimeout(self, value):
         self.timeout = value
@@ -84,7 +141,7 @@ class mysocket:
 
 
         # send ack packet
-        pack.tcp_syn = 0
+        pack.resetflags()
         pack.tcp_ack = 1
         pack.tcp_seq +=1
         pack.tcp_ack_seq = respPack.tcp_seq+1
@@ -92,6 +149,13 @@ class mysocket:
         pack.createpacket()
         bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
         print bytes
+        self.currentOutbound = pack
+
+    def __sendpacket(self, pack):
+        pass
+
+    def __recvpacket(self):
+        pass
 
 
 class packet:
@@ -137,7 +201,16 @@ class packet:
             self.tcp_header = pack('!HHLLBBH' , self.tcp_source, self.tcp_dest, self.tcp_seq, self.tcp_ack_seq, self.tcp_offset_res, self.tcp_flags,  self.tcp_window) + pack('H' , self.tcp_check) + pack('!H' , self.tcp_urg_ptr)
         return self.tcp_header
 
+    def resetflags(self):
+        self.tcp_fin = 0
+        self.tcp_syn = 0
+        self.tcp_rst = 0
+        self.tcp_psh = 0
+        self.tcp_ack = 0
+        self.tcp_urg = 0
+
     def createpacket(self):
+        self.tcp_check = 0
         self.makeTCPheader()
         self.tcp_length = len(self.tcp_header) + len(self.user_data)
 
@@ -176,20 +249,50 @@ class packet:
 
 
 
-# needed for calculation checksum
+# if pack("H",1) == "\x00\x01": # big endian
+#     def checksum(pkt):
+#         if len(pkt) % 2 == 1:
+#             pkt += "\0"
+#         s = sum(array.array("H", pkt))
+#         s = (s >> 16) + (s & 0xffff)
+#         s += s >> 16
+#         s = ~s
+#         return s & 0xffff
+# else:
+#     def checksum(pkt):
+#         if len(pkt) % 2 == 1:
+#             pkt += "\0"
+#         s = sum(array.array("H", pkt))
+#         s = (s >> 16) + (s & 0xffff)
+#         s += s >> 16
+#         s = ~s
+#         return (((s>>8)&0xff)|s<<8) & 0xffff
+
+def carry_around_add(a, b):
+    c = a + b
+    return (c & 0xffff) + (c >> 16)
+
 def checksum(msg):
     s = 0
-     
-    # loop taking 2 characters at a time
     for i in range(0, len(msg), 2):
-        w = ord(msg[i]) + (ord(msg[i+1]) << 8 )
-        s = s + w
+        w = ord(msg[i]) + (ord(msg[i+1]) << 8)
+        s = carry_around_add(s, w)
+    return ~s & 0xffff
+
+# needed for calculation checksum
+# def checksum(msg):
+#     s = 0
      
-    s = (s>>16) + (s & 0xffff);
-    s = s + (s >> 16);
+#     # loop taking 2 characters at a time
+#     for i in range(0, len(msg), 2):
+#         w = ord(msg[i]) + (ord(msg[i+1]) << 8 )
+#         s = s + w
      
-    #complement and mask to 4 byte short
-    s = ~s & 0xffff
+#     s = (s>>16) + (s & 0xffff);
+#     s = s + (s >> 16);
      
-    return s
+#     #complement and mask to 4 byte short
+#     s = ~s & 0xffff
+     
+#     return s
  
