@@ -3,16 +3,16 @@ from random import randint
 from struct import *
 import array
  
-# Block ICMP: "iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.81.222 -j DROP"  <-- Use src IP
-# Enable Promiscuous mode: "ifconfig wlan0 promisc"
+# Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.81.241 -j DROP"  <-- Use src IP
+# Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
 class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.81.222'
+        self.src_ip = '72.19.81.241'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
@@ -33,29 +33,33 @@ class mysocket:
         pack.resetflags()
         pack.tcp_fin = 1;
         pack.tcp_ack = 1;
-        pack.createpacket()
-        bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
-        # print bytes
-
-        # receive fin ack packet
-        response, addr = self.sock.recvfrom(65535)
-        print len(response)
-        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        respPack.extractData(response)
-
-        # receive fin packet
-        response, addr = self.sock.recvfrom(65535)
-        print len(response)
-        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        respPack.extractData(response)
-
-        # send ack packet
-        # pack = self.currentOutbound
-        # pack.resetflags()
-        # pack.tcp_fin = 1
-        # pack.tcp_ack = 1
+        pack.user_data = ""
         # pack.createpacket()
         # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        # print bytes
+        self.__sendpacket(pack)
+
+        # receive ack packet
+        # response, addr = self.sock.recvfrom(65535)
+        # print len(response)
+        # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        # respPack.extractData(response)
+        self.__recvpacket()
+
+        # receive fin packet
+        # response, addr = self.sock.recvfrom(65535)
+        # print len(response)
+        # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        # respPack.extractData(response)
+        self.__recvpacket()
+
+        # send ack packet
+        pack = self.currentOutbound
+        pack.resetflags()
+        pack.tcp_ack = 1
+        # pack.createpacket()
+        # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        self.__sendpacket(pack)
 
     def connect(self, address):
         #create a raw socket
@@ -80,20 +84,22 @@ class mysocket:
 
     def recv(self, bufsize):
          # receive push packet
-        response, addr = self.sock.recvfrom(bufsize)
-        print len(response)
-        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        respPack.extractData(response)
-        self.currentInbound = respPack
+        # response, addr = self.sock.recvfrom(bufsize)
+        # print len(response)
+        # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        # respPack.extractData(response)
+        # self.currentInbound = respPack
+        self.__recvpacket()
 
         # send push ack packet
         pack = self.currentOutbound
-        pack.tcp_ack_seq += len(respPack.user_data)
+        pack.tcp_ack_seq += len(self.currentInbound.user_data)
         pack.resetflags()
         pack.tcp_psh = 1
         pack.tcp_ack = 1
-        pack.createpacket()
-        bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        # pack.createpacket()
+        # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        self.__sendpacket(pack)
 
 
     def recvfrom(self, bufsize):
@@ -105,14 +111,16 @@ class mysocket:
         pack.resetflags()
         pack.tcp_psh = 1;
         pack.user_data = data
-        pack.createpacket()
-        bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        # pack.createpacket()
+        # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        self.__sendpacket(pack)
 
         # receive ack
-        response, addr = self.sock.recvfrom(65535)
-        print len(response)
-        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        respPack.extractData(response)
+        # response, addr = self.sock.recvfrom(65535)
+        # print len(response)
+        # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        # respPack.extractData(response)
+        self.__recvpacket()
 
     def settimeout(self, value):
         self.timeout = value
@@ -125,16 +133,19 @@ class mysocket:
         pack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
         pack.tcp_syn = 1
         pack.tcp_seq = randint(0, 2**32)
-        pack.createpacket()
+        # pack.createpacket()
         # print self.dest_ip
-        bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
         # print bytes
+        self.__sendpacket(pack)
 
         # Recieve syn ack packet
-        response, addr = self.sock.recvfrom(65535)
-        print len(response)
-        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        respPack.extractData(response)
+        # response, addr = self.sock.recvfrom(65535)
+        # # print len(response)
+        # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        # respPack.extractData(response)
+        # # respPack.printPacket()
+        self.__recvpacket()
 
 
         # time.sleep(1)
@@ -144,19 +155,27 @@ class mysocket:
         pack.resetflags()
         pack.tcp_ack = 1
         pack.tcp_seq +=1
-        pack.tcp_ack_seq = respPack.tcp_seq+1
+        pack.tcp_ack_seq = self.currentInbound.tcp_seq+1
         # pack.user_data = "Hello World!"
-        pack.createpacket()
-        bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
-        print bytes
-        self.currentOutbound = pack
+        # pack.createpacket()
+        # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        # print bytes
+        # self.currentOutbound = pack
+        self.__sendpacket(pack)
 
     def __sendpacket(self, pack):
-        pass
+        pack.createpacket()
+        bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        self.currentOutbound = pack
 
     def __recvpacket(self):
-        pass
-
+        response, addr = self.sock.recvfrom(65535)
+        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        respPack.extractData(response)
+        self.currentInbound = respPack
+        # print len(response)
+        # print respPack.user_data
+        return respPack
 
 class packet:
 
@@ -222,10 +241,17 @@ class packet:
         self.packet = self.makeTCPheader() + self.user_data
 
     def extractData(self, dataPack):
+        #   B = 1 byte
+        #   H = 2 bytes
+        #   L = 4 bytes
+
         # ipheadlength = (unpack('!B', dataPack[0])[0] << 60) >> 60
         # print ipheadlength
+        self.ip_totlength = unpack('!B', dataPack[1:2])[0]
+        # print "ip total length:" , self.ip_totlength
         # print (unpack('!B', dataPack[0])[0] >> 4) << 4
         # print (unpack('!B', dataPack[0])[0] >> 4) << 4 ^ unpack('!B', dataPack[0])[0]
+
         self.source_address = socket.inet_ntoa(dataPack[12:16])
         self.dest_address = socket.inet_ntoa(dataPack[16:20])
         self.tcp_source =  unpack('!H', dataPack[20:22])[0]
@@ -246,6 +272,33 @@ class packet:
         self.tcp_window = unpack('!H', dataPack[34:36])[0]
         self.tcp_check = unpack('H', dataPack[36:38])[0]
         self.tcp_urg_ptr = unpack('!H', dataPack[38:40])[0]
+
+        self.user_data = ""
+
+    def printPacket(self):
+
+        print "source ip:", self.source_address
+        print "destination ip:", self.dest_address
+        print "source port:", self.tcp_source
+        print "destination port:", self.tcp_dest
+
+        print "seq:", self.tcp_seq
+        print "ack:", self.tcp_ack_seq
+        print "data offset:", self.tcp_doff
+
+        print "fin:", self.tcp_fin
+        print "syn:", self.tcp_syn
+        print "rst:", self.tcp_rst
+        print "psh:", self.tcp_psh
+        print "ack:", self.tcp_ack
+        print "urg:", self.tcp_urg
+
+        print "window:", self.tcp_window
+        # print "checksum:", self.tcp_check
+        print "urg pointer:", self.tcp_urg_ptr
+
+        print "data:", self.user_data
+        print ""
 
 
 
