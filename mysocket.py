@@ -106,10 +106,11 @@ class mysocket:
         pass
 
     def send(self, data):
-        # send data
+        # send data with push ack
         pack = self.currentOutbound
         pack.resetflags()
         pack.tcp_psh = 1;
+        pack.tcp_ack = 1;
         pack.user_data = data
         # pack.createpacket()
         # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
@@ -167,12 +168,17 @@ class mysocket:
         pack.createpacket()
         bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
         self.currentOutbound = pack
+        pack.printPacket()
 
     def __recvpacket(self):
-        response, addr = self.sock.recvfrom(65535)
-        respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        respPack.extractData(response)
+        while 1:  
+            response, addr = self.sock.recvfrom(65535)
+            respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+            respPack.extractData(response)
+            if respPack.source_address == self.dest_ip and respPack.dest_address == self.src_ip:
+                break
         self.currentInbound = respPack
+        respPack.printPacket()
         # print len(response)
         # print respPack.user_data
         return respPack
@@ -276,9 +282,17 @@ class packet:
         self.user_data = ""
 
     def printPacket(self):
+        srcIP = self.source_address
+        destIP = self.dest_address
 
-        print "source ip:", self.source_address
-        print "destination ip:", self.dest_address
+        try:
+            srcIP = socket.inet_ntoa(srcIP)
+            destIP = socket.inet_ntoa(destIP)
+        except:
+            pass
+
+        print "source ip:", srcIP
+        print "destination ip:", destIP
         print "source port:", self.tcp_source
         print "destination port:", self.tcp_dest
 
@@ -286,12 +300,12 @@ class packet:
         print "ack:", self.tcp_ack_seq
         print "data offset:", self.tcp_doff
 
-        print "fin:", self.tcp_fin
-        print "syn:", self.tcp_syn
-        print "rst:", self.tcp_rst
-        print "psh:", self.tcp_psh
-        print "ack:", self.tcp_ack
-        print "urg:", self.tcp_urg
+        print "fin:", int(self.tcp_fin == True)
+        print "syn:", int(self.tcp_syn == True)
+        print "rst:", int(self.tcp_rst == True)
+        print "psh:", int(self.tcp_psh == True)
+        print "ack:", int(self.tcp_ack == True)
+        print "urg:", int(self.tcp_urg == True)
 
         print "window:", self.tcp_window
         # print "checksum:", self.tcp_check
