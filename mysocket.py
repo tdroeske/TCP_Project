@@ -109,6 +109,7 @@ class mysocket:
         # # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
         # self.__sendpacket(pack)
         self.__sendack()
+        return self.currentInbound.user_data
 
 
     def recvfrom(self, bufsize):
@@ -149,7 +150,7 @@ class mysocket:
         # print bytes
         self.__sendpacket(pack)
 
-        # Recieve syn ack packet
+        # Receive syn ack packet
         # response, addr = self.sock.recvfrom(65535)
         # # print len(response)
         # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
@@ -208,6 +209,7 @@ class mysocket:
         # if fin ack received, close connection
         if self.currentInbound.tcp_fin:
             self.__closeRequested()
+            return True
 
         # if syn sent, expect syn ack
         if self.currentOutbound.tcp_syn:
