@@ -4,7 +4,7 @@ from struct import *
 import array
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.81.206 -j DROP"  <-- Use src IP
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.81.173 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -12,7 +12,7 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.81.206'
+        self.src_ip = '72.19.81.173'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
@@ -21,6 +21,10 @@ class mysocket:
 
         self.currentOutbound = ''
         self.currentInbound = ''
+
+        self.estimatedRTT = 1
+        self.devRTT = 0
+        self.timeoutinterval = 1
 
     def accept(self):
         pass
@@ -58,6 +62,8 @@ class mysocket:
         pack = self.currentOutbound
         pack.resetflags()
         pack.tcp_ack = 1
+        pack.tcp_seq += 1
+        pack.tcp_ack_seq += 1
         # pack.createpacket()
         # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
         self.__sendpacket(pack)
@@ -124,6 +130,7 @@ class mysocket:
         pack.user_data = data
         # pack.createpacket()
         # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+        start = time.time()
         self.__sendpacket(pack)
 
         # receive ack
@@ -132,6 +139,8 @@ class mysocket:
         # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
         # respPack.extractData(response)
         self.__recvpacket()
+        end = time.time()
+        self.__calculatetimeout(end-start)
 
     def settimeout(self, value):
         self.timeout = value
@@ -208,7 +217,7 @@ class mysocket:
     def __validatePacket(self, pack):
         # if fin ack received, close connection
         if self.currentInbound.tcp_fin:
-            self.__closeRequested()
+            self.__finrecvd()
             return True
 
         # if syn sent, expect syn ack
@@ -239,26 +248,37 @@ class mysocket:
         pack.user_data = ""
         self.__sendpacket(pack)
 
-    def __closeRequested(self):
+    def __finrecvd(self):
         # fin ack received
-        # send ack packet
         pack = self.currentOutbound
         # pack.resetflags()
         # pack.tcp_ack = 1
         # self.__sendpacket(pack)
-        self.__sendack()
 
-        # send fin ack packet
-        pack.resetflags()
-        pack.tcp_fin = 1;
-        pack.tcp_ack = 1;
-        pack.user_data = ""
-        self.__sendpacket(pack)
+        # if we didn't initiate the close connection, then respond with an ack, then a fin ack
+        if not pack.tcp_fin:
+            # send ack packet
+            pack.tcp_seq += 1
+            pack.tcp_ack_seq += 1
+            self.__sendack()
 
-        # receive ack packet
-        self.__recvpacket()
+            # send fin ack packet
+            pack.resetflags()
+            pack.tcp_fin = 1;
+            pack.tcp_ack = 1;
+            pack.user_data = ""
+            self.__sendpacket(pack)
 
-        self.connOpen = False
+            # receive ack packet
+            self.__recvpacket()
+
+            self.connOpen = False
+
+    def __calculatetimeout(self, sampleRTT):
+        self.estimatedRTT = 0.875 * self.estimatedRTT + 0.125 * sampleRTT   # pg. 239
+        self.devRTT = 0.75 * self.devRTT + 0.25 * abs(sampleRTT - self.estimatedRTT)     # pg. 240
+        self.timeoutinterval = self.estimatedRTT + 4 * self.devRTT
+
 
 class packet:
 
