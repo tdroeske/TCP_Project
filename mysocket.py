@@ -2,9 +2,11 @@ import socket, sys, time
 from random import randint
 from struct import *
 import array
+import threading
+import Queue
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.81.173 -j DROP"  <-- Use src IP
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.82.126 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -12,19 +14,30 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.81.173'
+        self.src_ip = '72.19.82.126'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
         self.timeout = 0
         self.connOpen = False
 
-        self.currentOutbound = ''
-        self.currentInbound = ''
+        self.currentOutbound = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        self.currentInbound = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
 
         self.estimatedRTT = 1
         self.devRTT = 0
         self.timeoutinterval = 1
+
+        self.recvQueue = Queue.Queue()
+        self.sendQueue = Queue.Queue()
+        self.recvthread = threading.Thread(target=self.__recvloop)
+        self.sendthread = threading.Thread(target=self.__sendloop)
+        self.sendBase = 0;
+        # self.recvthread.start()
+        # time.sleep(1)
+        # self.src_ip = '192.168.1.1'
+
+        self.printlock = threading.Lock()
 
     def accept(self):
         pass
@@ -39,23 +52,12 @@ class mysocket:
         pack.tcp_fin = 1;
         pack.tcp_ack = 1;
         pack.user_data = ""
-        # pack.createpacket()
-        # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
-        # print bytes
         self.__sendpacket(pack)
 
         # receive ack packet
-        # response, addr = self.sock.recvfrom(65535)
-        # print len(response)
-        # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        # respPack.extractData(response)
         self.__recvpacket()
 
         # receive fin packet
-        # response, addr = self.sock.recvfrom(65535)
-        # print len(response)
-        # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        # respPack.extractData(response)
         self.__recvpacket()
 
         # send ack packet
@@ -64,8 +66,6 @@ class mysocket:
         pack.tcp_ack = 1
         pack.tcp_seq += 1
         pack.tcp_ack_seq += 1
-        # pack.createpacket()
-        # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
         self.__sendpacket(pack)
 
         self.connOpen = False
@@ -80,9 +80,23 @@ class mysocket:
         self.dest_ip = address[0]
         self.dest_port = address[1]
 
-        self.__connsetup()
+        # Send syn packet
+        pack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+        pack.tcp_syn = 1
+        pack.tcp_seq = randint(0, 2**32)
+        self.sendBase = pack.tcp_seq
+        self.__sendpacket(pack)
 
-        
+        # Receive syn ack packet
+        self.__recvpacket()
+        self.connOpen = True
+
+        # send ack packet
+        self.__sendack()
+        self.sendBase = pack.tcp_seq
+
+        self.sendthread.start()
+        self.recvthread.start()        
 
     def getpeername(self):
         return self.dest_ip, self.dest_port
@@ -94,28 +108,19 @@ class mysocket:
         pass
 
     def recv(self, bufsize):
-        # receive push packet
-        # response, addr = self.sock.recvfrom(bufsize)
-        # print len(response)
-        # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        # respPack.extractData(response)
-        # self.currentInbound = respPack
-        while 1:
-            self.__recvpacket()
-            if self.currentInbound.tcp_psh:
-                break
+        # # receive push packet
+        # while 1:
+        #     self.__recvpacket()
+        #     if self.currentInbound.tcp_psh:
+        #         break
 
-        # send ack packet
-        # pack = self.currentOutbound
-        # pack.tcp_ack_seq += len(self.currentInbound.user_data)
-        # pack.resetflags()
-        # # pack.tcp_psh = 1
-        # pack.tcp_ack = 1
-        # # pack.createpacket()
-        # # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
-        # self.__sendpacket(pack)
-        self.__sendack()
-        return self.currentInbound.user_data
+        # # send ack packet
+        # self.__sendack()
+        # return self.currentInbound.user_data
+        
+        while 1:
+            if not self.recvQueue.empty():
+                return self.recvQueue.get().user_data
 
 
     def recvfrom(self, bufsize):
@@ -128,19 +133,13 @@ class mysocket:
         pack.tcp_psh = 1;
         pack.tcp_ack = 1;
         pack.user_data = data
-        # pack.createpacket()
-        # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
-        start = time.time()
-        self.__sendpacket(pack)
+        # start = time.time()
+        self.sendQueue.put(pack)
 
         # receive ack
-        # response, addr = self.sock.recvfrom(65535)
-        # print len(response)
-        # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        # respPack.extractData(response)
         self.__recvpacket()
-        end = time.time()
-        self.__calculatetimeout(end-start)
+        # end = time.time()
+        # self.__calculatetimeout(end-start)
 
     def settimeout(self, value):
         self.timeout = value
@@ -148,50 +147,15 @@ class mysocket:
     def gettimeout(self):
         return self.timeout
 
-    def __connsetup(self):
-        # Send syn packet
-        pack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        pack.tcp_syn = 1
-        pack.tcp_seq = randint(0, 2**32)
-        # pack.createpacket()
-        # print self.dest_ip
-        # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
-        # print bytes
-        self.__sendpacket(pack)
-
-        # Receive syn ack packet
-        # response, addr = self.sock.recvfrom(65535)
-        # # print len(response)
-        # respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
-        # respPack.extractData(response)
-        # # respPack.printPacket()
-        self.__recvpacket()
-        self.connOpen = True
-
-
-        # time.sleep(1)
-
-
-        # send ack packet
-        # pack.resetflags()
-        # pack.tcp_ack = 1
-        # pack.tcp_seq +=1
-        # pack.tcp_ack_seq = self.currentInbound.tcp_seq+1
-        # # pack.user_data = "Hello World!"
-        # # pack.createpacket()
-        # # bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
-        # # print bytes
-        # # self.currentOutbound = pack
-        # self.__sendpacket(pack)
-        self.__sendack()
 
     def __sendpacket(self, pack):
         if self.connOpen or pack.tcp_syn:
             pack.createpacket()
             bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+            self.__printPacket(pack)
             self.currentOutbound = pack
             self.currentOutbound.tcp_seq += len(self.currentOutbound.user_data)
-            pack.printPacket()
+            
 
     def __recvpacket(self):
         if self.connOpen or self.currentOutbound.tcp_syn:
@@ -200,18 +164,19 @@ class mysocket:
                 respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
                 respPack.extractData(response)
                 if respPack.source_address == self.dest_ip and respPack.dest_address == self.src_ip:
+                    self.__printPacket(respPack)
                     break
 
             self.currentInbound = respPack
             if not self.__validatePacket(respPack):
+                pass
                 # return None
-                print ""
+                # print ""
                 print "invalid packet"
                 print ""
             # print len(response)
             # print respPack.user_data
             # self.currentOutbound.tcp_ack_seq += len(self.currentInbound.user_data)
-            respPack.printPacket()
             return respPack
 
     def __validatePacket(self, pack):
@@ -222,14 +187,17 @@ class mysocket:
 
         # if syn sent, expect syn ack
         if self.currentOutbound.tcp_syn:
+            # print "invalid packet: syn sent, expected syn ack"
             return self.currentInbound.tcp_syn and self.currentInbound.tcp_ack
 
         # if psh ack sent, expect ack
-        if self.currentOutbound.tcp_psh and self.currentOutbound.tcp_ack:
-            return self.currentInbound.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin
+        # if self.currentOutbound.tcp_psh and self.currentOutbound.tcp_ack:
+        #     print "invalid packet: psh ack sent, expected ack"
+        #     return self.currentInbound.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin
 
         # if fin ack sent, expect ack
         if self.currentOutbound.tcp_fin and self.currentOutbound.tcp_ack:
+            # print "invalid packet: fin ack sent, expected ack"
             return self.currentInbound.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin
 
     def __sendack(self):
@@ -243,14 +211,24 @@ class mysocket:
             pack.tcp_seq +=1
             pack.tcp_ack_seq = self.currentInbound.tcp_seq+1
 
+        if self.currentInbound.tcp_fin and self.currentInbound.tcp_ack:
+            # pack.tcp_seq +=1
+            pack.tcp_ack_seq = self.currentInbound.tcp_seq+1
+
         pack.resetflags()
         pack.tcp_ack = 1
         pack.user_data = ""
         self.__sendpacket(pack)
 
+    def __ackrecvd(self):
+        if self.currentInbound.tcp_ack_seq > self.sendBase:
+            self.sendBase = self.currentInbound.tcp_ack_seq
+
     def __finrecvd(self):
+        print "Fin received"
         # fin ack received
         pack = self.currentOutbound
+        inpack = self.currentInbound
         # pack.resetflags()
         # pack.tcp_ack = 1
         # self.__sendpacket(pack)
@@ -258,16 +236,20 @@ class mysocket:
         # if we didn't initiate the close connection, then respond with an ack, then a fin ack
         if not pack.tcp_fin:
             # send ack packet
-            pack.tcp_seq += 1
-            pack.tcp_ack_seq += 1
+            # pack.resetflags()
+            # pack.tcp_ack = 1
+            # pack.tcp_seq += 1
+            # pack.tcp_ack_seq = inpack.tcp_seq + 1
+            # print "Acking the unexpected Fin Ack"
             self.__sendack()
+
 
             # send fin ack packet
             pack.resetflags()
             pack.tcp_fin = 1;
             pack.tcp_ack = 1;
             pack.user_data = ""
-            self.__sendpacket(pack)
+            self.sendQueue.put(pack)
 
             # receive ack packet
             self.__recvpacket()
@@ -279,6 +261,30 @@ class mysocket:
         self.devRTT = 0.75 * self.devRTT + 0.25 * abs(sampleRTT - self.estimatedRTT)     # pg. 240
         self.timeoutinterval = self.estimatedRTT + 4 * self.devRTT
 
+
+    def __recvloop(self):
+        # print "Testing thread"
+        # print self.src_ip
+        # time.sleep(3)
+        # print self.src_ip
+        while self.connOpen:
+            self.__recvpacket()
+            if self.currentInbound.tcp_psh:
+                print "Added packet to recvQueue"
+                self.recvQueue.put(self.currentInbound)
+            else:
+                print "Not a psh packet"
+
+    def __sendloop(self):
+        while self.connOpen:
+            if(not self.sendQueue.empty()):
+                pack = self.sendQueue.get()
+                self.__sendpacket(pack)
+
+    def __printPacket(self, pack):
+        self.printlock.acquire()
+        pack.printPacket()
+        self.printlock.release()
 
 class packet:
 
