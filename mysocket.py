@@ -28,6 +28,7 @@ class mysocket:
         self.devRTT = 0
         self.timeoutinterval = 1
 
+        self.threadsOpen = True
         self.recvQueue = Queue.Queue()
         self.sendQueue = Queue.Queue()
         self.recvthread = threading.Thread(target=self.__recvloop)
@@ -46,6 +47,8 @@ class mysocket:
         pass
 
     def close(self):
+        self.threadsOpen = False
+
         # send fin packet
         pack = self.currentOutbound
         pack.resetflags()
@@ -61,12 +64,12 @@ class mysocket:
         self.__recvpacket()
 
         # send ack packet
-        pack = self.currentOutbound
-        pack.resetflags()
-        pack.tcp_ack = 1
-        pack.tcp_seq += 1
-        pack.tcp_ack_seq += 1
-        self.__sendpacket(pack)
+        # pack = self.currentOutbound
+        # pack.resetflags()
+        # pack.tcp_ack = 1
+        # pack.tcp_seq += 1
+        # pack.tcp_ack_seq += 1
+        # self.__sendpacket(pack)
 
         self.connOpen = False
 
@@ -233,6 +236,8 @@ class mysocket:
         # pack.tcp_ack = 1
         # self.__sendpacket(pack)
 
+        self.__sendack()
+        self.threadsOpen = False
         # if we didn't initiate the close connection, then respond with an ack, then a fin ack
         if not pack.tcp_fin:
             # send ack packet
@@ -241,7 +246,7 @@ class mysocket:
             # pack.tcp_seq += 1
             # pack.tcp_ack_seq = inpack.tcp_seq + 1
             # print "Acking the unexpected Fin Ack"
-            self.__sendack()
+            # self.__sendack()
 
 
             # send fin ack packet
@@ -249,7 +254,7 @@ class mysocket:
             pack.tcp_fin = 1;
             pack.tcp_ack = 1;
             pack.user_data = ""
-            self.sendQueue.put(pack)
+            self.__sendpacket(pack)
 
             # receive ack packet
             self.__recvpacket()
@@ -267,7 +272,8 @@ class mysocket:
         # print self.src_ip
         # time.sleep(3)
         # print self.src_ip
-        while self.connOpen:
+        print "Entering recvloop"
+        while self.threadsOpen:
             self.__recvpacket()
             if self.currentInbound.tcp_psh:
                 print "Added packet to recvQueue"
@@ -276,7 +282,7 @@ class mysocket:
                 print "Not a psh packet"
 
     def __sendloop(self):
-        while self.connOpen:
+        while self.threadsOpen:
             if(not self.sendQueue.empty()):
                 pack = self.sendQueue.get()
                 self.__sendpacket(pack)
