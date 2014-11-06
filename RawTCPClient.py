@@ -7,10 +7,10 @@ sock.connect(['192.241.166.195', 12000])
 time.sleep(5)
 # sock.send("Hello World!")
 sock.send("Test Message One")	# Check length of strings
-# sock.send("Test Message Two")
-# sock.send("Test Message Three")
-# sock.send("Test Message Four!")
-# sock.send("Test Message Five!")
+sock.send("Test Message Two")
+sock.send("Test Message Three")
+sock.send("Test Message Four!")
+sock.send("Test Message Five!")
 modifiedSentence = sock.recv(65535)
 print ""
 print "Response:", modifiedSentence

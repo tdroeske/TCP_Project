@@ -4,6 +4,7 @@ from struct import *
 import array
 import threading
 import Queue
+import copy
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
 # Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.82.12 -j DROP"  <-- Use src IP
@@ -34,11 +35,13 @@ class mysocket:
         self.recvthread = threading.Thread(target=self.__recvloop)
         self.sendthread = threading.Thread(target=self.__sendloop)
         self.sendBase = 0;
+        self.nextseqnum = 0;
         # self.recvthread.start()
         # time.sleep(1)
         # self.src_ip = '192.168.1.1'
 
         self.printlock = threading.Lock()
+        # self.sendlock = threading.Lock()
 
     def accept(self):
         pass
@@ -97,6 +100,7 @@ class mysocket:
         # send ack packet
         self.__sendack()
         self.sendBase = pack.tcp_seq
+        self.nextseqnum = pack.tcp_seq
 
         self.sendthread.start()
         self.recvthread.start()        
@@ -131,14 +135,19 @@ class mysocket:
 
     def send(self, data):
         # send data with push ack
-        pack = self.currentOutbound
+        # pack = self.currentOutbound
+        pack = copy.deepcopy(self.currentOutbound)
         pack.resetflags()
         pack.tcp_psh = 1;
         pack.tcp_ack = 1;
+        pack.tcp_seq = self.nextseqnum
         pack.user_data = data
+        
+        # print "Sending", pack.user_data
         # start = time.time()
         self.sendQueue.put(pack)
 
+        self.nextseqnum += len(data)
         # receive ack
         # self.__recvpacket()
         # end = time.time()
@@ -156,8 +165,8 @@ class mysocket:
             pack.createpacket()
             bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
             self.__printPacket(pack)
+            # pack.tcp_seq += len(pack.user_data)
             self.currentOutbound = pack
-            self.currentOutbound.tcp_seq += len(self.currentOutbound.user_data)
             
 
     def __recvpacket(self):
@@ -208,7 +217,8 @@ class mysocket:
         pack = self.currentOutbound
 
         if self.currentInbound.tcp_psh:
-            pack.tcp_ack_seq += len(self.currentInbound.user_data)
+            pack.tcp_ack_seq = self.currentInbound.tcp_seq + len(self.currentInbound.user_data)
+            pack.tcp_seq = self.nextseqnum
 
         if self.currentInbound.tcp_syn and self.currentInbound.tcp_ack:
             pack.tcp_seq +=1
@@ -272,20 +282,30 @@ class mysocket:
         # print self.src_ip
         # time.sleep(3)
         # print self.src_ip
+        self.sock.setblocking(0)
         print "Entering recvloop"
         while self.threadsOpen:
-            self.__recvpacket()
-            if self.currentInbound.tcp_psh:
-                print "Added packet to recvQueue"
-                self.recvQueue.put(self.currentInbound)
-            else:
-                print "Not a psh packet"
+            try:
+                self.__recvpacket()
+            
+                if self.currentInbound.tcp_psh:
+                    self.__sendack()
+                    self.recvQueue.put(self.currentInbound)
+                    print "Added packet to recvQueue"
+                else:
+                    print "Not a psh packet"
+            except:
+                pass
+        self.sock.setblocking(1)
+        printlog("recvloop done")
 
     def __sendloop(self):
         while self.threadsOpen:
             if(not self.sendQueue.empty()):
                 pack = self.sendQueue.get()
+                # print "Sending", pack.user_data
                 self.__sendpacket(pack)
+        printlog("sendloop done")
 
     def __printPacket(self, pack):
         self.printlock.acquire()
@@ -476,3 +496,7 @@ def checksum(msg):
      
 #     return s
  
+debug = True
+def printlog(s):
+    if debug:
+        print s
