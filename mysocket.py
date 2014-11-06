@@ -6,7 +6,7 @@ import threading
 import Queue
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.82.158 -j DROP"  <-- Use src IP
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.82.12 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -14,7 +14,7 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.82.158'
+        self.src_ip = '72.19.82.12'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
