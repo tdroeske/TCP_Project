@@ -7,7 +7,7 @@ import Queue
 import copy
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.82.12 -j DROP"  <-- Use src IP
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.83.103 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -15,7 +15,7 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.82.12'
+        self.src_ip = '72.19.83.103'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
@@ -36,6 +36,7 @@ class mysocket:
         self.sendthread = threading.Thread(target=self.__sendloop)
         self.sendBase = 0;
         self.nextseqnum = 0;
+        self.nextseqnumsent = 0;
         # self.recvthread.start()
         # time.sleep(1)
         # self.src_ip = '192.168.1.1'
@@ -101,6 +102,7 @@ class mysocket:
         self.__sendack()
         self.sendBase = pack.tcp_seq
         self.nextseqnum = pack.tcp_seq
+        self.nextseqnumsent = pack.tcp_seq
 
         self.sendthread.start()
         self.recvthread.start()        
@@ -167,6 +169,7 @@ class mysocket:
             self.__printPacket(pack)
             # pack.tcp_seq += len(pack.user_data)
             self.currentOutbound = pack
+            self.nextseqnumsent += len(pack.user_data)
             
 
     def __recvpacket(self):
@@ -218,7 +221,7 @@ class mysocket:
 
         if self.currentInbound.tcp_psh:
             pack.tcp_ack_seq = self.currentInbound.tcp_seq + len(self.currentInbound.user_data)
-            pack.tcp_seq = self.nextseqnum
+            pack.tcp_seq = self.nextseqnumsent  # I think something is wrong here!!! Fix it!                            <-- LOOK HERE!!
 
         if self.currentInbound.tcp_syn and self.currentInbound.tcp_ack:
             pack.tcp_seq +=1

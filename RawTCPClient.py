@@ -9,6 +9,7 @@ time.sleep(5)
 sock.send("Test Message One")	# Check length of strings
 sock.send("Test Message Two")
 sock.send("Test Message Three")
+time.sleep(1)
 sock.send("Test Message Four!")
 sock.send("Test Message Five!")
 modifiedSentence = sock.recv(65535)
