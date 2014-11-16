@@ -30,11 +30,14 @@ class mysocket:
         self.timeoutinterval = 1
 
         self.threadsOpen = True
-        self.recvQueue = Queue.Queue()
-        self.sendQueue = Queue.Queue()
+        self.recvQueue = []  # Used when the application layer calls recv()
+        self.sendQueue = []  # Used to send a packet
+        self.inboundQueue = []   # Used to store packets and add to the recvQueue when they are in order
+        self.outboundQueue = []  # Used to store unacknowledged packets
+
         self.recvthread = threading.Thread(target=self.__recvloop)
         self.sendthread = threading.Thread(target=self.__sendloop)
-        self.sendBase = 0;
+        self.sendBase = 0; # Oldest unacknowledged byte
         self.nextseqnum = 0;
         self.nextseqnumsent = 0;
         # self.recvthread.start()
@@ -91,7 +94,7 @@ class mysocket:
         pack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
         pack.tcp_syn = 1
         pack.tcp_seq = randint(0, 2**32)
-        self.sendBase = pack.tcp_seq
+        # self.sendBase = pack.tcp_seq
         self.__sendpacket(pack)
 
         # Receive syn ack packet
@@ -128,8 +131,8 @@ class mysocket:
         # return self.currentInbound.user_data
         
         while 1:
-            if not self.recvQueue.empty():
-                return self.recvQueue.get().user_data
+            if not len(self.recvQueue) == 0:
+                return self.recvQueue.pop(0).user_data
 
 
     def recvfrom(self, bufsize):
@@ -147,7 +150,7 @@ class mysocket:
         
         # print "Sending", pack.user_data
         # start = time.time()
-        self.sendQueue.put(pack)
+        self.sendQueue.append(pack)
 
         self.nextseqnum += len(data)
         # receive ack
@@ -166,6 +169,7 @@ class mysocket:
         if self.connOpen or pack.tcp_syn:
             pack.createpacket()
             bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
+            pack.timesent = time.time()
             self.__printPacket(pack)
             # pack.tcp_seq += len(pack.user_data)
             self.currentOutbound = pack
@@ -221,7 +225,7 @@ class mysocket:
 
         if self.currentInbound.tcp_psh:
             pack.tcp_ack_seq = self.currentInbound.tcp_seq + len(self.currentInbound.user_data)
-            pack.tcp_seq = self.nextseqnumsent  # I think something is wrong here!!! Fix it!                            <-- LOOK HERE!!
+            pack.tcp_seq = self.nextseqnumsent
 
         if self.currentInbound.tcp_syn and self.currentInbound.tcp_ack:
             pack.tcp_seq +=1
@@ -239,6 +243,12 @@ class mysocket:
     def __ackrecvd(self):
         if self.currentInbound.tcp_ack_seq > self.sendBase:
             self.sendBase = self.currentInbound.tcp_ack_seq
+            '''
+            if (there are currently any not-yet-acknowledged segments)
+                start timer
+            }
+            '''
+
 
     def __finrecvd(self):
         print "Fin received"
@@ -293,7 +303,7 @@ class mysocket:
             
                 if self.currentInbound.tcp_psh:
                     self.__sendack()
-                    self.recvQueue.put(self.currentInbound)
+                    self.recvQueue.append(self.currentInbound)
                     print "Added packet to recvQueue"
                 else:
                     print "Not a psh packet"
@@ -304,8 +314,10 @@ class mysocket:
 
     def __sendloop(self):
         while self.threadsOpen:
-            if(not self.sendQueue.empty()):
-                pack = self.sendQueue.get()
+            if not len(self.sendQueue) == 0:
+                pack = self.sendQueue.pop(0)
+                if pack.tcp_psh:
+                    self.outboundQueue.append(pack)
                 # print "Sending", pack.user_data
                 self.__sendpacket(pack)
         printlog("sendloop done")
@@ -346,6 +358,8 @@ class packet:
         self.dest_address = socket.inet_aton(dest_ip)
         self.placeholder = 0
         self.protocol = socket.IPPROTO_TCP
+
+        self.timesent = 0
 
     def makeTCPheader(self):
         self.tcp_offset_res = (self.tcp_doff << 4) + 0
