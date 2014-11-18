@@ -16,5 +16,9 @@ modifiedSentence = sock.recv(65535)
 print ""
 print "Response:", modifiedSentence
 print ""
+modifiedSentence = sock.recv(65535)
+print ""
+print "Response:", modifiedSentence
+print ""
 time.sleep(5)
 sock.close()

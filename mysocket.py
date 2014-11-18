@@ -7,7 +7,7 @@ import Queue
 import copy
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.83.103 -j DROP"  <-- Use src IP
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.82.224 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -15,7 +15,7 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.83.103'
+        self.src_ip = '72.19.82.224'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
@@ -31,6 +31,9 @@ class mysocket:
 
         self.threadsOpen = True
         self.recvQueue = []  # Used when the application layer calls recv()
+        # self.recvstart = 0
+        self.recvend = 0
+
         self.sendQueue = []  # Used to send a packet
         self.inboundQueue = []   # Used to store packets and add to the recvQueue when they are in order
         self.outboundQueue = []  # Used to store unacknowledged packets
@@ -40,9 +43,13 @@ class mysocket:
         self.sendBase = 0; # Oldest unacknowledged byte
         self.nextseqnum = 0;
         self.nextseqnumsent = 0;
+        self.nextacknum = 0;
         # self.recvthread.start()
         # time.sleep(1)
         # self.src_ip = '192.168.1.1'
+
+        self.inboundrecvwin = 0     # TODO change these accordingly and add in checks
+        self.outboundrecvwin = 0
 
         self.printlock = threading.Lock()
         # self.sendlock = threading.Lock()
@@ -99,6 +106,7 @@ class mysocket:
 
         # Receive syn ack packet
         self.__recvpacket()
+        self.nextacknum = self.currentInbound.tcp_seq+1
         self.connOpen = True
 
         # send ack packet
@@ -131,8 +139,13 @@ class mysocket:
         # return self.currentInbound.user_data
         
         while 1:
-            if not len(self.recvQueue) == 0:
-                return self.recvQueue.pop(0).user_data
+            if self.recvend > 0:
+                data = self.recvQueue.pop(0).user_data
+                # self.recvstart += 1
+                self.recvend -= 1
+                return data
+            # else:
+            #     printlog("no data to receive")
 
 
     def recvfrom(self, bufsize):
@@ -191,14 +204,18 @@ class mysocket:
                 pass
                 # return None
                 # print ""
-                print "invalid packet"
-                print ""
+                # print "invalid packet"
+                # print ""
             # print len(response)
             # print respPack.user_data
             # self.currentOutbound.tcp_ack_seq += len(self.currentInbound.user_data)
             return respPack
 
     def __validatePacket(self, pack):
+
+        if pack.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin:
+            self.__ackrecvd(pack) 
+
         # if fin ack received, close connection
         if self.currentInbound.tcp_fin:
             self.__finrecvd()
@@ -224,7 +241,7 @@ class mysocket:
         pack = self.currentOutbound
 
         if self.currentInbound.tcp_psh:
-            pack.tcp_ack_seq = self.currentInbound.tcp_seq + len(self.currentInbound.user_data)
+            pack.tcp_ack_seq = self.nextacknum
             pack.tcp_seq = self.nextseqnumsent
 
         if self.currentInbound.tcp_syn and self.currentInbound.tcp_ack:
@@ -240,14 +257,17 @@ class mysocket:
         pack.user_data = ""
         self.__sendpacket(pack)
 
-    def __ackrecvd(self):
-        if self.currentInbound.tcp_ack_seq > self.sendBase:
-            self.sendBase = self.currentInbound.tcp_ack_seq
+    def __ackrecvd(self, pack):
+        if pack.tcp_ack_seq > self.sendBase:
+            self.sendBase = pack.tcp_ack_seq
             '''
             if (there are currently any not-yet-acknowledged segments)
                 start timer
             }
             '''
+        # for p in  self.outboundQueue:
+            # if p.tcp_seq < pack.tcp_ack_seq:
+                # remove from queue
 
 
     def __finrecvd(self):
@@ -296,15 +316,32 @@ class mysocket:
         # time.sleep(3)
         # print self.src_ip
         self.sock.setblocking(0)
-        print "Entering recvloop"
+        printlog("Entering recvloop")
         while self.threadsOpen:
             try:
                 self.__recvpacket()
             
                 if self.currentInbound.tcp_psh:
+                    seen = False
+                    # for pack in self.recvQueue:
+                    #     if pack.tcp_seq == self.currentInbound.tcp_seq:
+                    #         seen = True
+                    if self.currentInbound.tcp_seq < self.nextacknum:
+                            seen = True
+                    if not seen:
+                        self.recvQueue.append(self.currentInbound)
+                        printlog("Added packet to recvQueue")
+                        if self.currentInbound.tcp_seq == self.nextacknum:
+                            self.recvend += 1 # TODO this needs to be incremented to the 1 after the last in-order packet, not always 1, use while loop
+                            printlog("recvend incremented")
+                        else:
+                            printlog("Out of order packet")
+                        self.nextacknum = self.currentInbound.tcp_seq + len(self.currentInbound.user_data)
+                    else:
+                        printlog("Duplicate packet received")
+
                     self.__sendack()
-                    self.recvQueue.append(self.currentInbound)
-                    print "Added packet to recvQueue"
+                    
                 else:
                     print "Not a psh packet"
             except:
@@ -349,7 +386,8 @@ class packet:
         self.tcp_psh = 0
         self.tcp_ack = 0
         self.tcp_urg = 0
-        self.tcp_window = socket.htons (5840)    #   maximum allowed window size
+        # self.tcp_window = socket.htons (5840)
+        self.tcp_window = 12840    #   maximum allowed window size
         self.tcp_check = 0
         self.tcp_urg_ptr = 0
 
@@ -383,6 +421,7 @@ class packet:
 
     def createpacket(self):
         self.tcp_check = 0
+        # self.tcp_window = socket.htons(self.tcp_window)
         self.makeTCPheader()
         self.tcp_length = len(self.tcp_header) + len(self.user_data)
         self.totlength = 20 + self.tcp_length
@@ -440,6 +479,7 @@ class packet:
         except:
             pass
 
+        print ""
         print "source ip:", srcIP
         print "destination ip:", destIP
         print "source port:", self.tcp_source
@@ -462,7 +502,7 @@ class packet:
         print "urg pointer:", self.tcp_urg_ptr
 
         print "data:", self.user_data
-        print ""
+        
 
 
 
