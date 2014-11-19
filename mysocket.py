@@ -57,10 +57,10 @@ class mysocket:
         self.printlock = threading.Lock()
         # self.sendlock = threading.Lock()
 
-    def accept(self):
+    def accept(self): # TODO
         pass
 
-    def bind(self, address):
+    def bind(self, address): # TODO
         pass
 
     def close(self):
@@ -127,7 +127,7 @@ class mysocket:
     def sockName(self):
         return self.src_ip, self.src_port
 
-    def listen(self, backlog):
+    def listen(self, backlog): # TODO
         pass
 
     def recv(self, bufsize):
@@ -153,7 +153,7 @@ class mysocket:
             #     printlog("no data to receive")
 
 
-    def recvfrom(self, bufsize):
+    def recvfrom(self, bufsize): # TODO
         pass
 
     def send(self, data):
@@ -368,7 +368,7 @@ class mysocket:
                 pack = self.sendQueue.pop(0)
                 if pack.tcp_psh:
                     self.outboundQueue.append(pack)
-                    self.lastbytesent = pack.tcp_seq
+                    self.lastbytesent = pack.tcp_seq + len(pack.user_data)
                 # print "Sending", pack.user_data
                 self.__sendpacket(pack)
         printlog("sendloop done")
