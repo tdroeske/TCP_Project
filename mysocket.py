@@ -53,15 +53,58 @@ class mysocket:
         self.lastbyteacked = 0
         self.outboundrecvwin = 12840
 
-
         self.printlock = threading.Lock()
         # self.sendlock = threading.Lock()
 
     def accept(self): # TODO
-        pass
+        # print self.src_port
+        while 1:  
+                response, addr = self.sock.recvfrom(65535)
+                # print "From accept()", self.src_ip
+                respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
+                respPack.extractData(response)
+
+                # print respPack.dest_address, ",", self.src_ip, "," , respPack.tcp_dest, "," , self.src_port
+                if respPack.dest_address == self.src_ip and respPack.tcp_dest == self.src_port:
+                    # printlog("Received proper packet")
+                    pack = packet(self.src_ip, self.src_port, respPack.source_address, respPack.tcp_source)
+                    pack.tcp_seq = randint(0, 2**32)
+                    self.__printPacket(respPack)
+                    self.dest_ip = respPack.source_address
+                    self.dest_port = respPack.tcp_source
+                    if respPack.tcp_syn:
+                        break
+                    else:
+                        pack.tcp_rst = 1
+                    self.__sendpacket(pack)
+
+        # Send syn ack packet
+        pack.tcp_syn = 1
+        pack.tcp_ack = 1
+        pack.tcp_ack_seq = respPack.tcp_seq + 1
+        # self.sendBase = pack.tcp_seq
+        self.__sendpacket(pack)
+
+        # Receive ack
+        self.__recvpacket()
+
+        self.sendBase = pack.tcp_seq
+        self.nextseqnum = pack.tcp_seq + 1
+        self.nextseqnumsent = pack.tcp_seq + 1
+        self.nextacknum = pack.tcp_ack_seq
+
+        self.connOpen = True
+        self.sendthread.start()
+        self.recvthread.start() 
+
+        return self, respPack.source_address
 
     def bind(self, address): # TODO
-        pass
+        ip, port = address
+        if len(ip) > 0:
+            self.src_ip = ip
+        self.src_port = port
+        # self.src_ip, self.src_port = address
 
     def close(self):
         self.threadsOpen = False
@@ -114,6 +157,7 @@ class mysocket:
 
         # send ack packet
         self.__sendack()
+
         self.sendBase = pack.tcp_seq
         self.nextseqnum = pack.tcp_seq
         self.nextseqnumsent = pack.tcp_seq
@@ -128,7 +172,12 @@ class mysocket:
         return self.src_ip, self.src_port
 
     def listen(self, backlog): # TODO
-        pass
+        #create a raw socket
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+        except socket.error , msg:
+            print 'Socket could not be created. Error Code : ' + str(msg[0]) + ' Message ' + msg[1]
+            sys.exit()
 
     def recv(self, bufsize):
         # # receive push packet
@@ -154,7 +203,7 @@ class mysocket:
 
 
     def recvfrom(self, bufsize): # TODO
-        pass
+        return self.recv(bufsize), self.dest_ip
 
     def send(self, data):
         # send data with push ack
@@ -201,7 +250,7 @@ class mysocket:
                 response, addr = self.sock.recvfrom(65535)
                 respPack = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
                 respPack.extractData(response)
-                if respPack.source_address == self.dest_ip and respPack.dest_address == self.src_ip:
+                if respPack.source_address == self.dest_ip and respPack.dest_address == self.src_ip and respPack.tcp_source == self.dest_port and respPack.tcp_dest == self.src_port:
                     self.__printPacket(respPack)
                     break
 
@@ -283,7 +332,8 @@ class mysocket:
 
 
     def __finrecvd(self):
-        print "Fin received"
+        print "Fin received" # TODO This gets called more than once, ignore fin ack packets if we already received a fin ack packet, 
+                             # it may be causing this to loop within recvpacket(). Make sure recvloop ends
         # fin ack received
         pack = self.currentOutbound
         inpack = self.currentInbound
@@ -293,7 +343,13 @@ class mysocket:
 
         self.__sendack()
         self.threadsOpen = False
-        # if we didn't initiate the close connection, then respond with an ack, then a fin ack
+
+        # add a dummy packet to recvQueue which returns data of length zero
+        pack = copy.deepcopy(self.currentOutbound)
+        pack.user_data = ''
+        self.recvQueue.append(pack)
+
+        # if we didn't initiate the close connection, then respond with an ack (done above), then a fin ack
         if not pack.tcp_fin:
             # send ack packet
             # pack.resetflags()
@@ -406,7 +462,11 @@ class packet:
         self.tcp_urg_ptr = 0
 
         # pseudo header fields
-        self.source_address = socket.inet_aton( source_ip )
+        try:
+            # print source_ip, len(source_ip)
+            self.source_address = socket.inet_aton(source_ip)
+        except:
+            self.source_address = socket.inet_aton("0.0.0.0")
         self.dest_address = socket.inet_aton(dest_ip)
         self.placeholder = 0
         self.protocol = socket.IPPROTO_TCP
