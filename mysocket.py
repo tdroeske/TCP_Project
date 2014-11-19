@@ -7,7 +7,7 @@ import Queue
 import copy
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.82.224 -j DROP"  <-- Use src IP
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.83.67 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -15,7 +15,7 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.82.224'
+        self.src_ip = '72.19.83.67'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
@@ -40,7 +40,7 @@ class mysocket:
 
         self.recvthread = threading.Thread(target=self.__recvloop)
         self.sendthread = threading.Thread(target=self.__sendloop)
-        self.sendBase = 0; # Oldest unacknowledged byte
+        self.sendBase = 0; # Oldest unacknowledged byte     # TODO Update this accordingly
         self.nextseqnum = 0;
         self.nextseqnumsent = 0;
         self.nextacknum = 0;
@@ -48,8 +48,11 @@ class mysocket:
         # time.sleep(1)
         # self.src_ip = '192.168.1.1'
 
-        self.inboundrecvwin = 0     # TODO change these accordingly and add in checks
-        self.outboundrecvwin = 0
+        self.inboundrecvwin = 0
+        self.lastbytesent = 0
+        self.lastbyteacked = 0
+        self.outboundrecvwin = 12840
+
 
         self.printlock = threading.Lock()
         # self.sendlock = threading.Lock()
@@ -140,9 +143,11 @@ class mysocket:
         
         while 1:
             if self.recvend > 0:
-                data = self.recvQueue.pop(0).user_data
+                pack = self.recvQueue.pop(0)
+                data = pack.user_data
                 # self.recvstart += 1
                 self.recvend -= 1
+                self.outboundrecvwin += len(data)
                 return data
             # else:
             #     printlog("no data to receive")
@@ -180,6 +185,7 @@ class mysocket:
 
     def __sendpacket(self, pack):
         if self.connOpen or pack.tcp_syn:
+            pack.tcp_window = self.outboundrecvwin
             pack.createpacket()
             bytes = self.sock.sendto(pack.packet, (self.dest_ip , 0 ))
             pack.timesent = time.time()
@@ -208,6 +214,7 @@ class mysocket:
                 # print ""
             # print len(response)
             # print respPack.user_data
+            self.inboundrecvwin = respPack.tcp_window
             # self.currentOutbound.tcp_ack_seq += len(self.currentInbound.user_data)
             return respPack
 
@@ -256,8 +263,13 @@ class mysocket:
         pack.tcp_ack = 1
         pack.user_data = ""
         self.__sendpacket(pack)
+        # self.sendQueue.append(pack)
 
     def __ackrecvd(self, pack):
+        printlog("ack received")
+
+        self.lastbyteacked = pack.tcp_ack_seq
+
         if pack.tcp_ack_seq > self.sendBase:
             self.sendBase = pack.tcp_ack_seq
             '''
@@ -333,6 +345,7 @@ class mysocket:
                         printlog("Added packet to recvQueue")
                         if self.currentInbound.tcp_seq == self.nextacknum:
                             self.recvend += 1 # TODO this needs to be incremented to the 1 after the last in-order packet, not always 1, use while loop
+                            self.outboundrecvwin -= len(self.currentInbound.user_data)
                             printlog("recvend incremented")
                         else:
                             printlog("Out of order packet")
@@ -351,10 +364,11 @@ class mysocket:
 
     def __sendloop(self):
         while self.threadsOpen:
-            if not len(self.sendQueue) == 0:
+            if not len(self.sendQueue) == 0 and self.lastbytesent -self.lastbyteacked <= self.inboundrecvwin:
                 pack = self.sendQueue.pop(0)
                 if pack.tcp_psh:
                     self.outboundQueue.append(pack)
+                    self.lastbytesent = pack.tcp_seq
                 # print "Sending", pack.user_data
                 self.__sendpacket(pack)
         printlog("sendloop done")
