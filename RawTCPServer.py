@@ -9,6 +9,7 @@ print 'The server is ready to receive'
 # while 1:
 connectionSocket, addr = serverSocket.accept()
 while 1:
+	# print "waiting for more data"
 	sentence = connectionSocket.recv(1024)
 	if len(sentence) == 0:
 		break;

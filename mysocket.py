@@ -7,7 +7,7 @@ import Queue
 import copy
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.83.67 -j DROP"  <-- Use src IP
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.81.113 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -15,7 +15,7 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.83.67'
+        self.src_ip = '72.19.81.113'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
@@ -53,10 +53,17 @@ class mysocket:
         self.lastbyteacked = 0
         self.outboundrecvwin = 12840
 
+        self.mss = 1386
+        self.cwnd = self.mss
+        self.ssthresh = 0
+
+        self.finsent = False
+        self.finrecvd = False
+
         self.printlock = threading.Lock()
         # self.sendlock = threading.Lock()
 
-    def accept(self): # TODO
+    def accept(self):
         # print self.src_port
         while 1:  
                 response, addr = self.sock.recvfrom(65535)
@@ -107,21 +114,25 @@ class mysocket:
         # self.src_ip, self.src_port = address
 
     def close(self):
-        self.threadsOpen = False
+        # self.threadsOpen = False
 
         # send fin packet
         pack = self.currentOutbound
         pack.resetflags()
         pack.tcp_fin = 1;
         pack.tcp_ack = 1;
+        pack.tcp_seq = self.nextseqnumsent
         pack.user_data = ""
-        self.__sendpacket(pack)
+        if not self.finsent and not self.finrecvd:
+            self.__sendpacket(pack)
+            self.finsent = True
+            self.nextseqnumsent += 1
 
         # receive ack packet
-        self.__recvpacket()
+        # self.__recvpacket()
 
         # receive fin packet
-        self.__recvpacket()
+        # self.__recvpacket()
 
         # send ack packet
         # pack = self.currentOutbound
@@ -131,7 +142,7 @@ class mysocket:
         # pack.tcp_ack_seq += 1
         # self.__sendpacket(pack)
 
-        self.connOpen = False
+        # self.connOpen = False
 
     def connect(self, address):
         #create a raw socket
@@ -171,7 +182,7 @@ class mysocket:
     def sockName(self):
         return self.src_ip, self.src_port
 
-    def listen(self, backlog): # TODO
+    def listen(self, backlog):
         #create a raw socket
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
@@ -202,7 +213,7 @@ class mysocket:
             #     printlog("no data to receive")
 
 
-    def recvfrom(self, bufsize): # TODO
+    def recvfrom(self, bufsize):
         return self.recv(bufsize), self.dest_ip
 
     def send(self, data):
@@ -269,6 +280,7 @@ class mysocket:
 
     def __validatePacket(self, pack):
 
+        # if ack received
         if pack.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin:
             self.__ackrecvd(pack) 
 
@@ -306,6 +318,7 @@ class mysocket:
 
         if self.currentInbound.tcp_fin and self.currentInbound.tcp_ack:
             # pack.tcp_seq +=1
+            pack.tcp_seq = self.nextseqnumsent
             pack.tcp_ack_seq = self.currentInbound.tcp_seq+1
 
         pack.resetflags()
@@ -332,25 +345,27 @@ class mysocket:
 
 
     def __finrecvd(self):
-        print "Fin received" # TODO This gets called more than once, ignore fin ack packets if we already received a fin ack packet, 
-                             # it may be causing this to loop within recvpacket(). Make sure recvloop ends
+        printlog("Fin received") 
+                             
         # fin ack received
-        pack = self.currentOutbound
-        inpack = self.currentInbound
+        self.finrecvd = True
+        # pack = self.currentOutbound
+        # inpack = self.currentInbound
         # pack.resetflags()
         # pack.tcp_ack = 1
         # self.__sendpacket(pack)
 
         self.__sendack()
-        self.threadsOpen = False
+        # self.threadsOpen = False
 
         # add a dummy packet to recvQueue which returns data of length zero
         pack = copy.deepcopy(self.currentOutbound)
         pack.user_data = ''
         self.recvQueue.append(pack)
+        self.recvend += 1
 
         # if we didn't initiate the close connection, then respond with an ack (done above), then a fin ack
-        if not pack.tcp_fin:
+        if not self.finsent:
             # send ack packet
             # pack.resetflags()
             # pack.tcp_ack = 1
@@ -362,15 +377,19 @@ class mysocket:
 
             # send fin ack packet
             pack.resetflags()
-            pack.tcp_fin = 1;
-            pack.tcp_ack = 1;
+            pack.tcp_fin = 1
+            pack.tcp_ack = 1
+            pack.tcp_seq = self.nextseqnumsent
             pack.user_data = ""
             self.__sendpacket(pack)
+            self.finsent = True
+            self.nextseqnumsent += 1
 
             # receive ack packet
-            self.__recvpacket()
+            # self.__recvpacket()
 
-            self.connOpen = False
+        self.connOpen = False
+        self.threadsOpen = False
 
     def __calculatetimeout(self, sampleRTT):
         self.estimatedRTT = 0.875 * self.estimatedRTT + 0.125 * sampleRTT   # pg. 239
@@ -379,10 +398,6 @@ class mysocket:
 
 
     def __recvloop(self):
-        # print "Testing thread"
-        # print self.src_ip
-        # time.sleep(3)
-        # print self.src_ip
         self.sock.setblocking(0)
         printlog("Entering recvloop")
         while self.threadsOpen:
@@ -394,9 +409,9 @@ class mysocket:
                     # for pack in self.recvQueue:
                     #     if pack.tcp_seq == self.currentInbound.tcp_seq:
                     #         seen = True
-                    if self.currentInbound.tcp_seq < self.nextacknum:
-                            seen = True
-                    if not seen:
+                    # if self.currentInbound.tcp_seq < self.nextacknum:
+                            # seen = True
+                    if self.currentInbound.tcp_seq >= self.nextacknum: # not seen
                         self.recvQueue.append(self.currentInbound)
                         printlog("Added packet to recvQueue")
                         if self.currentInbound.tcp_seq == self.nextacknum:
@@ -407,12 +422,10 @@ class mysocket:
                             printlog("Out of order packet")
                         self.nextacknum = self.currentInbound.tcp_seq + len(self.currentInbound.user_data)
                     else:
+                        pass
                         printlog("Duplicate packet received")
 
                     self.__sendack()
-                    
-                else:
-                    print "Not a psh packet"
             except:
                 pass
         self.sock.setblocking(1)
@@ -420,7 +433,7 @@ class mysocket:
 
     def __sendloop(self):
         while self.threadsOpen:
-            if not len(self.sendQueue) == 0 and self.lastbytesent -self.lastbyteacked <= self.inboundrecvwin:
+            if not len(self.sendQueue) == 0 and self.lastbytesent - self.lastbyteacked <= self.inboundrecvwin:
                 pack = self.sendQueue.pop(0)
                 if pack.tcp_psh:
                     self.outboundQueue.append(pack)
@@ -553,29 +566,53 @@ class packet:
         except:
             pass
 
-        print ""
-        print "source ip:", srcIP
-        print "destination ip:", destIP
-        print "source port:", self.tcp_source
-        print "destination port:", self.tcp_dest
+        printlog("")
+        printlog("source ip: " + str(srcIP))
+        printlog("destination ip: " + str(destIP))
+        printlog("source port: " + str(self.tcp_source))
+        printlog("destination port: " + str(self.tcp_dest))
 
-        print "seq:", self.tcp_seq
-        print "ack:", self.tcp_ack_seq
-        print "data offset:", self.tcp_doff
-        print "total length:", self.totlength
+        printlog("seq: " + str(self.tcp_seq))
+        printlog("ack: " + str(self.tcp_ack_seq))
+        printlog("data offset: " + str(self.tcp_doff))
+        printlog("total length: " + str(self.totlength))
 
-        print "fin:", int(self.tcp_fin == True)
-        print "syn:", int(self.tcp_syn == True)
-        print "rst:", int(self.tcp_rst == True)
-        print "psh:", int(self.tcp_psh == True)
-        print "ack:", int(self.tcp_ack == True)
-        print "urg:", int(self.tcp_urg == True)
+        printlog("fin: " + str(int(self.tcp_fin == True)))
+        printlog("syn: " + str(int(self.tcp_syn == True)))
+        printlog("rst: " + str(int(self.tcp_rst == True)))
+        printlog("psh: " + str(int(self.tcp_psh == True)))
+        printlog("ack: " + str(int(self.tcp_ack == True)))
+        printlog("urg: " + str(int(self.tcp_urg == True)))
 
-        print "window:", self.tcp_window
-        # print "checksum:", self.tcp_check
-        print "urg pointer:", self.tcp_urg_ptr
+        printlog("window: " + str(self.tcp_window))
+        # printlog("checksum:", self.tcp_check
+        printlog("urg pointer: " + str(self.tcp_urg_ptr))
 
-        print "data:", self.user_data
+        printlog("data: " + str(self.user_data))
+
+        # print ""
+        # print "source ip:", srcIP
+        # print "destination ip:", destIP
+        # print "source port:", self.tcp_source
+        # print "destination port:", self.tcp_dest
+
+        # print "seq:", self.tcp_seq
+        # print "ack:", self.tcp_ack_seq
+        # print "data offset:", self.tcp_doff
+        # print "total length:", self.totlength
+
+        # print "fin:", int(self.tcp_fin == True)
+        # print "syn:", int(self.tcp_syn == True)
+        # print "rst:", int(self.tcp_rst == True)
+        # print "psh:", int(self.tcp_psh == True)
+        # print "ack:", int(self.tcp_ack == True)
+        # print "urg:", int(self.tcp_urg == True)
+
+        # print "window:", self.tcp_window
+        # # print "checksum:", self.tcp_check
+        # print "urg pointer:", self.tcp_urg_ptr
+
+        # print "data:", self.user_data
         
 
 
@@ -627,7 +664,8 @@ def checksum(msg):
      
 #     return s
  
-debug = True
+debug = False
+# debug = True
 def printlog(s):
     if debug:
         print s
