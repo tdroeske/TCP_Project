@@ -7,7 +7,7 @@ import Queue
 import copy
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.81.113 -j DROP"  <-- Use src IP
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.80.211 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -15,7 +15,7 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.81.113'
+        self.src_ip = '72.19.80.211'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
@@ -636,16 +636,25 @@ class packet:
 #         s = ~s
 #         return (((s>>8)&0xff)|s<<8) & 0xffff
 
-def carry_around_add(a, b):
-    c = a + b
-    return (c & 0xffff) + (c >> 16)
+# def carry_around_add(a, b):
+#     c = a + b
+#     return (c & 0xffff) + (c >> 16)
 
-def checksum(msg):
-    s = 0
-    for i in range(0, len(msg), 2):
-        w = ord(msg[i]) + (ord(msg[i+1]) << 8)
-        s = carry_around_add(s, w)
-    return ~s & 0xffff
+# def checksum(msg):    # <- Use this one
+#     s = 0
+#     for i in range(0, len(msg), 2):
+#         w = ord(msg[i]) + (ord(msg[i+1]) << 8)
+#         s = carry_around_add(s, w)
+#     return ~s & 0xffff
+
+def checksum(pkt):  # <- This one works too
+    if len(pkt) % 2 == 1:
+        pkt += "\0"
+    s = sum(array.array("H", pkt))
+    s = (s >> 16) + (s & 0xffff)
+    s += s >> 16
+    s = ~s
+    return s & 0xffff
 
 # needed for calculation checksum
 # def checksum(msg):
