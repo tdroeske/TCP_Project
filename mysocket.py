@@ -265,9 +265,9 @@ class mysocket:
                     self.__printPacket(respPack)
                     break
 
-            self.currentInbound = respPack
-            if not self.__validatePacket(respPack):
-                pass
+            
+            if self.__validatePacket(respPack):
+                self.currentInbound = respPack
                 # return None
                 # print ""
                 # print "invalid packet"
@@ -280,29 +280,33 @@ class mysocket:
 
     def __validatePacket(self, pack):
 
+        if not pack.correctchecksum:
+            return False
+
         # if ack received
         if pack.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin:
-            self.__ackrecvd(pack) 
+            self.__ackrecvd(pack)
 
         # if fin ack received, close connection
         if self.currentInbound.tcp_fin:
             self.__finrecvd()
-            return True
 
-        # if syn sent, expect syn ack
-        if self.currentOutbound.tcp_syn:
-            # print "invalid packet: syn sent, expected syn ack"
-            return self.currentInbound.tcp_syn and self.currentInbound.tcp_ack
+        return True
 
-        # if psh ack sent, expect ack
-        # if self.currentOutbound.tcp_psh and self.currentOutbound.tcp_ack:
-        #     print "invalid packet: psh ack sent, expected ack"
+        # # if syn sent, expect syn ack
+        # if self.currentOutbound.tcp_syn:
+        #     # print "invalid packet: syn sent, expected syn ack"
+        #     return self.currentInbound.tcp_syn and self.currentInbound.tcp_ack
+
+        # # if psh ack sent, expect ack
+        # # if self.currentOutbound.tcp_psh and self.currentOutbound.tcp_ack:
+        # #     print "invalid packet: psh ack sent, expected ack"
+        # #     return self.currentInbound.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin
+
+        # # if fin ack sent, expect ack
+        # if self.currentOutbound.tcp_fin and self.currentOutbound.tcp_ack:
+        #     # print "invalid packet: fin ack sent, expected ack"
         #     return self.currentInbound.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin
-
-        # if fin ack sent, expect ack
-        if self.currentOutbound.tcp_fin and self.currentOutbound.tcp_ack:
-            # print "invalid packet: fin ack sent, expected ack"
-            return self.currentInbound.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin
 
     def __sendack(self):
         # send ack packet
@@ -521,7 +525,7 @@ class packet:
 
         self.packet = self.makeTCPheader() + self.user_data
 
-    def checksum(pkt):  # <- This one works too
+    def checksum(self, pkt):  # <- This one works too
         if len(pkt) % 2 == 1:
             pkt += "\0"
         s = sum(array.array("H", pkt))
