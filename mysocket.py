@@ -52,6 +52,7 @@ class mysocket:
         self.lastbytesent = 0
         self.lastbyteacked = 0
         self.outboundrecvwin = 12840
+        self.duplicateacks = 0
 
         self.mss = 1386
         self.cwnd = self.mss
@@ -334,18 +335,27 @@ class mysocket:
     def __ackrecvd(self, pack):
         printlog("ack received")
 
-        self.lastbyteacked = pack.tcp_ack_seq
 
         if pack.tcp_ack_seq > self.sendBase:
             self.sendBase = pack.tcp_ack_seq
+            self.duplicateacks = 0
             '''
             if (there are currently any not-yet-acknowledged segments)
                 start timer
             }
             '''
-        # for p in  self.outboundQueue:
-            # if p.tcp_seq < pack.tcp_ack_seq:
-                # remove from queue
+        else:   # duplicate ack received
+            self.duplicateacks += 1
+            if self.duplicateacks >=3:  # Fast retransmit
+                self.sendQueue.insert(0, self.outboundQueue[0])
+                self.duplicateacks = 0
+
+        # Removes packets that have now been acked
+        for p in  self.outboundQueue:
+            if p.tcp_seq < pack.tcp_ack_seq:
+                self.outboundQueue.pop(0)
+
+        self.lastbyteacked = pack.tcp_ack_seq
 
 
     def __finrecvd(self):
