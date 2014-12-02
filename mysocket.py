@@ -485,6 +485,7 @@ class packet:
         self.protocol = socket.IPPROTO_TCP
 
         self.timesent = 0
+        self.correctchecksum = False    # Used when reading received packets
 
     def makeTCPheader(self):
         self.tcp_offset_res = (self.tcp_doff << 4) + 0
@@ -516,9 +517,18 @@ class packet:
         psh = pack('!4s4sBBH' , self.source_address , self.dest_address , self.placeholder , self.protocol , self.tcp_length);
         psh = psh + self.tcp_header + self.user_data;
          
-        self.tcp_check = checksum(psh)
+        self.tcp_check = self.checksum(psh)
 
         self.packet = self.makeTCPheader() + self.user_data
+
+    def checksum(pkt):  # <- This one works too
+        if len(pkt) % 2 == 1:
+            pkt += "\0"
+        s = sum(array.array("H", pkt))
+        s = (s >> 16) + (s & 0xffff)
+        s += s >> 16
+        s = ~s
+        return s & 0xffff
 
     def extractData(self, dataPack):
         #   B = 1 byte
@@ -535,6 +545,7 @@ class packet:
 
         self.source_address = socket.inet_ntoa(dataPack[12:16])
         self.dest_address = socket.inet_ntoa(dataPack[16:20])
+
         self.tcp_source =  unpack('!H', dataPack[20:22])[0]
         self.tcp_dest =  unpack('!H', dataPack[22:24])[0]
 
@@ -555,6 +566,26 @@ class packet:
         self.tcp_urg_ptr = unpack('!H', dataPack[38:40])[0]
 
         self.user_data = dataPack[40:]
+
+
+
+        dataPack = dataPack[:36] + pack('H' , 0) + dataPack[38:]
+        self.tcp_header = dataPack[20:40]
+        self.tcp_offset_res = (self.tcp_doff << 4) + 0
+        self.tcp_length = len(self.tcp_header) + len(self.user_data)
+
+        psh = pack('!4s4sBBH' , socket.inet_aton(self.source_address) , socket.inet_aton(self.dest_address) , self.placeholder , self.protocol , self.tcp_length);
+        psh = psh + self.tcp_header + self.user_data;
+         
+        calulatedcheck = self.checksum(psh)
+
+        if calulatedcheck == self.tcp_check:
+            self.correctchecksum = True
+            printlog("checksum correct")
+        else:
+            self.correctchecksum = False
+            printlog("checksum incorrect")
+
 
     def printPacket(self):
         srcIP = self.source_address
@@ -647,14 +678,14 @@ class packet:
 #         s = carry_around_add(s, w)
 #     return ~s & 0xffff
 
-def checksum(pkt):  # <- This one works too
-    if len(pkt) % 2 == 1:
-        pkt += "\0"
-    s = sum(array.array("H", pkt))
-    s = (s >> 16) + (s & 0xffff)
-    s += s >> 16
-    s = ~s
-    return s & 0xffff
+# def checksum(pkt):  # <- This one works too
+#     if len(pkt) % 2 == 1:
+#         pkt += "\0"
+#     s = sum(array.array("H", pkt))
+#     s = (s >> 16) + (s & 0xffff)
+#     s += s >> 16
+#     s = ~s
+#     return s & 0xffff
 
 # needed for calculation checksum
 # def checksum(msg):
