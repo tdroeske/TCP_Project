@@ -11,8 +11,8 @@ with open("aladdin.txt") as file:
     for line in file:
     	sock.send(line)
     	count += 1
-
-# sock.close()
+print "file closed"
+sock.close()
 print count
 
 

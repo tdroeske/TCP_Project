@@ -7,7 +7,7 @@ import Queue
 import copy
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.80.211 -j DROP"  <-- Use src IP
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.83.244 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -15,7 +15,7 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.80.211'
+        self.src_ip = '72.19.83.244'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
@@ -55,8 +55,8 @@ class mysocket:
         self.duplicateacks = 0
 
         self.mss = 1386
-        self.cwnd = self.mss
-        self.ssthresh = 0
+        self.cwnd = 3 * self.mss #  Chosen by the RFC
+        self.ssthresh = 10 * self.mss # This is arbitrarily high as per request of the RFC
 
         self.finsent = False
         self.finrecvd = False
@@ -339,23 +339,28 @@ class mysocket:
         if pack.tcp_ack_seq > self.sendBase:
             self.sendBase = pack.tcp_ack_seq
             self.duplicateacks = 0
+
+            self.cwnd += min(self.mss, pack.tcp_ack_seq - self.sendBase)
+
             '''
             if (there are currently any not-yet-acknowledged segments)
                 start timer
             }
             '''
+
+            self.lastbyteacked = pack.tcp_ack_seq - 1
         else:   # duplicate ack received
             self.duplicateacks += 1
             if self.duplicateacks >=3:  # Fast retransmit
                 self.sendQueue.insert(0, self.outboundQueue[0])
                 self.duplicateacks = 0
+                self.ssthresh = self.cwnd/2
+                self.cwnd = self.ssthresh + 3*self.mss
 
         # Removes packets that have now been acked
         for p in  self.outboundQueue:
             if p.tcp_seq < pack.tcp_ack_seq:
                 self.outboundQueue.pop(0)
-
-        self.lastbyteacked = pack.tcp_ack_seq
 
 
     def __finrecvd(self):
@@ -447,7 +452,7 @@ class mysocket:
 
     def __sendloop(self):
         while self.threadsOpen:
-            if not len(self.sendQueue) == 0 and self.lastbytesent - self.lastbyteacked <= self.inboundrecvwin:
+            if not len(self.sendQueue) == 0 and self.lastbytesent - self.lastbyteacked <= min(self.inboundrecvwin, self.cwnd):
                 pack = self.sendQueue.pop(0)
                 if pack.tcp_psh:
                     self.outboundQueue.append(pack)
