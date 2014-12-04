@@ -5,9 +5,10 @@ import array
 import threading
 import Queue
 import copy
+import signal
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.83.244 -j DROP"  <-- Use src IP
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.82.201 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -15,7 +16,7 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.83.244'
+        self.src_ip = '72.19.82.201'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
@@ -28,6 +29,8 @@ class mysocket:
         self.estimatedRTT = 1
         self.devRTT = 0
         self.timeoutinterval = 1
+        signal.signal(signal.SIGALRM, self.timeouthandler)
+        self.timerrunning = False
 
         self.threadsOpen = True
         self.recvQueue = []  # Used when the application layer calls recv()
@@ -54,7 +57,7 @@ class mysocket:
         self.outboundrecvwin = 12840
         self.duplicateacks = 0
 
-        self.mss = 1386
+        self.mss = 1386 # Chosen based off of a sample used in the plain TCP
         self.cwnd = 3 * self.mss #  Chosen by the RFC
         self.ssthresh = 10 * self.mss # This is arbitrarily high as per request of the RFC
 
@@ -285,7 +288,8 @@ class mysocket:
             return False
 
         # if ack received
-        if pack.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin:
+        # if pack.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin:
+        if pack.tcp_ack:
             self.__ackrecvd(pack)
 
         # if fin ack received, close connection
@@ -334,6 +338,7 @@ class mysocket:
 
     def __ackrecvd(self, pack):
         printlog("ack received")
+        timerecv = time.time()
 
 
         if pack.tcp_ack_seq > self.sendBase:
@@ -342,11 +347,20 @@ class mysocket:
 
             self.cwnd += min(self.mss, pack.tcp_ack_seq - self.sendBase)
 
-            '''
-            if (there are currently any not-yet-acknowledged segments)
-                start timer
-            }
-            '''
+            self.__stoptimer()
+
+            # Removes packets that have now been acked
+            for p in  self.outboundQueue[:]:
+                # print p.tcp_psh, p.tcp_ack
+                if p.tcp_seq < pack.tcp_ack_seq:
+                    # print "Removing", p.user_data, "from outboundQueue"
+                    self.outboundQueue.remove(p)
+                    if p.tcp_seq + len(p.user_data) == pack.tcp_ack_seq:
+                        self.__calculatetimeout(timerecv - p.timesent)
+ 
+            if len(self.outboundQueue) != 0:  # if there are currently any not-yet-acknowledged segments, start timer
+                self.__starttimer()
+
 
             self.lastbyteacked = pack.tcp_ack_seq - 1
         else:   # duplicate ack received
@@ -356,11 +370,6 @@ class mysocket:
                 self.duplicateacks = 0
                 self.ssthresh = self.cwnd/2
                 self.cwnd = self.ssthresh + 3*self.mss
-
-        # Removes packets that have now been acked
-        for p in  self.outboundQueue:
-            if p.tcp_seq < pack.tcp_ack_seq:
-                self.outboundQueue.pop(0)
 
 
     def __finrecvd(self):
@@ -411,9 +420,13 @@ class mysocket:
         self.threadsOpen = False
 
     def __calculatetimeout(self, sampleRTT):
-        self.estimatedRTT = 0.875 * self.estimatedRTT + 0.125 * sampleRTT   # pg. 239
+        self.estimatedRTT = 0.875 * self.estimatedRTT + 0.125 * sampleRTT   # pg. 239       
         self.devRTT = 0.75 * self.devRTT + 0.25 * abs(sampleRTT - self.estimatedRTT)     # pg. 240
         self.timeoutinterval = self.estimatedRTT + 4 * self.devRTT
+        # print "sampleRTT", sampleRTT
+        # print "estimatedRTT", self.estimatedRTT
+        # print "devRTT", self.devRTT
+        # print "timeoutinterval", self.timeoutinterval
 
 
     def __recvloop(self):
@@ -424,7 +437,7 @@ class mysocket:
                 self.__recvpacket()
             
                 if self.currentInbound.tcp_psh:
-                    seen = False
+                    seen = False    # This isn't used anymore
                     # for pack in self.recvQueue:
                     #     if pack.tcp_seq == self.currentInbound.tcp_seq:
                     #         seen = True
@@ -455,9 +468,12 @@ class mysocket:
             if not len(self.sendQueue) == 0 and self.lastbytesent - self.lastbyteacked <= min(self.inboundrecvwin, self.cwnd):
                 pack = self.sendQueue.pop(0)
                 if pack.tcp_psh:
+                    # print pack.tcp_psh, pack.tcp_ack
                     self.outboundQueue.append(pack)
                     self.lastbytesent = pack.tcp_seq + len(pack.user_data)
                 # print "Sending", pack.user_data
+                if not self.timerrunning:
+                    self.__starttimer()
                 self.__sendpacket(pack)
         printlog("sendloop done")
 
@@ -465,6 +481,25 @@ class mysocket:
         self.printlock.acquire()
         pack.printPacket()
         self.printlock.release()
+
+    def __starttimer(self):
+        signal.setitimer(signal.ITIMER_REAL, self.timeoutinterval)
+        self.timerrunning = True
+
+    def __stoptimer(self):
+        signal.alarm(0)
+        self.timerrunning = False
+
+    def timeouthandler(self, signum, frame):
+        # print "Timeout!"
+        # print self.outboundQueue[0].tcp_psh
+        # print self.outboundQueue[0].tcp_ack
+        # for p in  self.outboundQueue:
+            # print p.tcp_psh, p.tcp_ack
+        self.sendQueue.insert(0, self.outboundQueue[0])
+        self.timeoutinterval *= 2
+        self.__starttimer()
+        # raise Exception("Timeout!")
 
 class packet:
 
