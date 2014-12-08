@@ -120,7 +120,6 @@ class mysocket:
         # self.src_ip, self.src_port = address
 
     def close(self):
-        # self.threadsOpen = False
 
         # send fin packet
         pack = copy.deepcopy(self.currentOutbound)
@@ -138,21 +137,7 @@ class mysocket:
             self.finsent = True
             self.nextseqnumsent += 1
 
-        # receive ack packet
-        # self.__recvpacket()
 
-        # receive fin packet
-        # self.__recvpacket()
-
-        # send ack packet
-        # pack = self.currentOutbound
-        # pack.resetflags()
-        # pack.tcp_ack = 1
-        # pack.tcp_seq += 1
-        # pack.tcp_ack_seq += 1
-        # self.__sendpacket(pack)
-
-        # self.connOpen = False
 
     def connect(self, address):
         #create a raw socket
@@ -205,15 +190,6 @@ class mysocket:
             sys.exit()
 
     def recv(self, bufsize): #TODO Change this to receive bytes, not packets
-        # # receive push packet
-        # while 1:
-        #     self.__recvpacket()
-        #     if self.currentInbound.tcp_psh:
-        #         break
-
-        # # send ack packet
-        # self.__sendack()
-        # return self.currentInbound.user_data
         
         while 1:
             if self.recvend > 0:
@@ -232,7 +208,6 @@ class mysocket:
 
     def send(self, data):
         # send data with push ack
-        # pack = self.currentOutbound
         pack = copy.deepcopy(self.currentOutbound)
         pack.resetflags()
         pack.tcp_psh = 1;
@@ -241,14 +216,8 @@ class mysocket:
         pack.user_data = data
         
         # print "Sending", pack.user_data
-        # start = time.time()
         self.sendQueue.append(pack)
-
         self.nextseqnum += len(data)
-        # receive ack
-        # self.__recvpacket()
-        # end = time.time()
-        # self.__calculatetimeout(end-start)
 
     def settimeout(self, value):
         self.timeout = value
@@ -282,12 +251,9 @@ class mysocket:
             
             if self.__validatePacket(respPack):
                 self.currentInbound = respPack
-                # return None
-                # print ""
                 # print "invalid packet"
-                # print ""
-            # print len(response)
-            # print respPack.user_data
+                # print len(response)
+                # print respPack.user_data
             else:
                 self.sendQueue.insert(0, self.outboundQueue[0]) # Resend packet
             self.inboundrecvwin = respPack.tcp_window
@@ -310,20 +276,6 @@ class mysocket:
 
         return True
 
-        # # if syn sent, expect syn ack
-        # if self.currentOutbound.tcp_syn:
-        #     # print "invalid packet: syn sent, expected syn ack"
-        #     return self.currentInbound.tcp_syn and self.currentInbound.tcp_ack
-
-        # # if psh ack sent, expect ack
-        # # if self.currentOutbound.tcp_psh and self.currentOutbound.tcp_ack:
-        # #     print "invalid packet: psh ack sent, expected ack"
-        # #     return self.currentInbound.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin
-
-        # # if fin ack sent, expect ack
-        # if self.currentOutbound.tcp_fin and self.currentOutbound.tcp_ack:
-        #     # print "invalid packet: fin ack sent, expected ack"
-        #     return self.currentInbound.tcp_ack and not self.currentInbound.tcp_psh and not self.currentInbound.tcp_fin
 
     def __sendack(self):
         # send ack packet
@@ -409,14 +361,8 @@ class mysocket:
                              
         # fin ack received
         self.finrecvd = True
-        # pack = self.currentOutbound
-        # inpack = self.currentInbound
-        # pack.resetflags()
-        # pack.tcp_ack = 1
-        # self.__sendpacket(pack)
 
         self.__sendack()
-        # self.threadsOpen = False
 
         # add a dummy packet to recvQueue which returns data of length zero
         pack = copy.deepcopy(self.currentOutbound)
@@ -426,14 +372,6 @@ class mysocket:
 
         # if we didn't initiate the close connection, then respond with an ack (done above), then a fin ack
         if not self.finsent:
-            # send ack packet
-            # pack.resetflags()
-            # pack.tcp_ack = 1
-            # pack.tcp_seq += 1
-            # pack.tcp_ack_seq = inpack.tcp_seq + 1
-            # print "Acking the unexpected Fin Ack"
-            # self.__sendack()
-
 
             # send fin ack packet
             pack.resetflags()
@@ -520,7 +458,7 @@ class mysocket:
         pack.printPacket()
         self.printlock.release()
 
-    def __timerthread(self):
+    def __timerthread(self):  #This isn't used, signals are used instead
         time.sleep(self.timeoutinterval)
         # if self.timerrunning:
         self.__timeouthandler()
@@ -754,8 +692,8 @@ class packet:
 
         # print "data:", self.user_data
         
-# debug = False
 debug = False
+# debug = True
 def printlog(s):
     if debug:
         print s
