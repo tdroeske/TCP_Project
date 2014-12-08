@@ -8,7 +8,7 @@ import copy
 import signal
  
 # Block ICMP: "sudo iptables -A OUTPUT -p icmp --icmp-type 3 -j DROP"  <-- 3 is specific to Port Unreachable message
-# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.82.201 -j DROP"  <-- Use src IP
+# Disable RST Packets: "sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 72.19.80.249 -j DROP"  <-- Use src IP
 # Enable Promiscuous mode: "sudo ifconfig wlan0 promisc"
 # Wireshark: ip.dst == 192.241.166.195 or ip.src == 192.241.166.195
 
@@ -16,7 +16,7 @@ class mysocket:
 
     def __init__(self):
         self.sock = ''
-        self.src_ip = '72.19.82.201'
+        self.src_ip = '72.19.80.249'
         self.src_port = randint(1024, 65535)
         self.dest_ip = "0.0.0.0"
         self.dest_port = 0
@@ -26,10 +26,11 @@ class mysocket:
         self.currentOutbound = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
         self.currentInbound = packet(self.src_ip, self.src_port, self.dest_ip, self.dest_port)
 
-        self.estimatedRTT = 1
-        self.devRTT = 0
-        self.timeoutinterval = 1
-        signal.signal(signal.SIGALRM, self.timeouthandler)
+        self.timerthread = 0
+        self.estimatedRTT = 0 # seconds
+        self.devRTT = 0 # seconds
+        self.timeoutinterval = 1  # seconds
+        signal.signal(signal.SIGALRM, self.__timeouthandler)
         self.timerrunning = False
 
         self.threadsOpen = True
@@ -43,7 +44,7 @@ class mysocket:
 
         self.recvthread = threading.Thread(target=self.__recvloop)
         self.sendthread = threading.Thread(target=self.__sendloop)
-        self.sendBase = 0; # Oldest unacknowledged byte     # TODO Update this accordingly
+        self.sendBase = 0; # Oldest unacknowledged byte
         self.nextseqnum = 0;
         self.nextseqnumsent = 0;
         self.nextacknum = 0;
@@ -60,6 +61,7 @@ class mysocket:
         self.mss = 1386 # Chosen based off of a sample used in the plain TCP
         self.cwnd = 3 * self.mss #  Chosen by the RFC
         self.ssthresh = 10 * self.mss # This is arbitrarily high as per request of the RFC
+        self.ccmode = "ss"   # "ss" is slow start, "ca" is congestion aovidance, "fr" is fast recovery
 
         self.finsent = False
         self.finrecvd = False
@@ -110,7 +112,7 @@ class mysocket:
 
         return self, respPack.source_address
 
-    def bind(self, address): # TODO
+    def bind(self, address):
         ip, port = address
         if len(ip) > 0:
             self.src_ip = ip
@@ -121,14 +123,18 @@ class mysocket:
         # self.threadsOpen = False
 
         # send fin packet
-        pack = self.currentOutbound
+        pack = copy.deepcopy(self.currentOutbound)
         pack.resetflags()
         pack.tcp_fin = 1;
         pack.tcp_ack = 1;
-        pack.tcp_seq = self.nextseqnumsent
+        if len(self.sendQueue) == 0:
+            pack.tcp_seq = self.nextseqnumsent
+        else:
+            pack.tcp_seq = self.sendQueue[len(self.sendQueue)-1].tcp_seq + len(self.sendQueue[len(self.sendQueue)-1].user_data)
         pack.user_data = ""
         if not self.finsent and not self.finrecvd:
-            self.__sendpacket(pack)
+            # self.__sendpacket(pack)
+            self.sendQueue.append(pack)
             self.finsent = True
             self.nextseqnumsent += 1
 
@@ -165,6 +171,10 @@ class mysocket:
         # self.sendBase = pack.tcp_seq
         self.__sendpacket(pack)
 
+        self.sendBase = self.currentOutbound.tcp_seq
+        self.nextseqnum = self.currentOutbound.tcp_seq
+        self.nextseqnumsent = self.currentOutbound.tcp_seq
+
         # Receive syn ack packet
         self.__recvpacket()
         self.nextacknum = self.currentInbound.tcp_seq+1
@@ -173,9 +183,9 @@ class mysocket:
         # send ack packet
         self.__sendack()
 
-        self.sendBase = pack.tcp_seq
-        self.nextseqnum = pack.tcp_seq
-        self.nextseqnumsent = pack.tcp_seq
+        self.sendBase = self.currentOutbound.tcp_seq
+        self.nextseqnum = self.currentOutbound.tcp_seq
+        self.nextseqnumsent = self.currentOutbound.tcp_seq
 
         self.sendthread.start()
         self.recvthread.start()        
@@ -194,7 +204,7 @@ class mysocket:
             print 'Socket could not be created. Error Code : ' + str(msg[0]) + ' Message ' + msg[1]
             sys.exit()
 
-    def recv(self, bufsize):
+    def recv(self, bufsize): #TODO Change this to receive bytes, not packets
         # # receive push packet
         # while 1:
         #     self.__recvpacket()
@@ -278,6 +288,8 @@ class mysocket:
                 # print ""
             # print len(response)
             # print respPack.user_data
+            else:
+                self.sendQueue.insert(0, self.outboundQueue[0]) # Resend packet
             self.inboundrecvwin = respPack.tcp_window
             # self.currentOutbound.tcp_ack_seq += len(self.currentInbound.user_data)
             return respPack
@@ -315,7 +327,7 @@ class mysocket:
 
     def __sendack(self):
         # send ack packet
-        pack = self.currentOutbound
+        pack = copy.deepcopy(self.currentOutbound)
 
         if self.currentInbound.tcp_psh:
             pack.tcp_ack_seq = self.nextacknum
@@ -342,10 +354,23 @@ class mysocket:
 
 
         if pack.tcp_ack_seq > self.sendBase:
+            if self.ccmode == "ss":
+                self.cwnd += min(self.mss, pack.tcp_ack_seq - self.sendBase)
+                if self.cwnd > self.ssthresh:
+                    self.ccmode = "ca"
+            elif self.ccmode == "ca":
+                self.cwnd += min(self.mss, pack.tcp_ack_seq - self.sendBase) * self.mss/self.cwnd
+            elif self.ccmode == "fr":
+                self.cwnd = self.ssthresh
+                self.ccmode = "ca"
+            else:
+                raise Exception("Invalid Congestion Control State")
+            # print pack.tcp_ack_seq - self.sendBase
+            # print "sendBase now" , self.sendBase
+            # print self.cwnd
+
             self.sendBase = pack.tcp_ack_seq
             self.duplicateacks = 0
-
-            self.cwnd += min(self.mss, pack.tcp_ack_seq - self.sendBase)
 
             self.__stoptimer()
 
@@ -365,11 +390,18 @@ class mysocket:
             self.lastbyteacked = pack.tcp_ack_seq - 1
         else:   # duplicate ack received
             self.duplicateacks += 1
-            if self.duplicateacks >=3:  # Fast retransmit
+            if self.duplicateacks >= 3:  # Fast retransmit  #This should use == rather than >= but I left it this way because my timeouts didn't work
+                self.ccmode = "ff"
                 self.sendQueue.insert(0, self.outboundQueue[0])
-                self.duplicateacks = 0
+                self.__stoptimer()
+                self.__starttimer()
+                # self.duplicateacks = 0
                 self.ssthresh = self.cwnd/2
                 self.cwnd = self.ssthresh + 3*self.mss
+                # print "3 dup acks, cwnd now", self.cwnd
+            elif self.duplicateacks > 3:
+                self.cwnd = self.cwnd + self.mss
+                # print self.cwnd
 
 
     def __finrecvd(self):
@@ -420,9 +452,14 @@ class mysocket:
         self.threadsOpen = False
 
     def __calculatetimeout(self, sampleRTT):
-        self.estimatedRTT = 0.875 * self.estimatedRTT + 0.125 * sampleRTT   # pg. 239       
-        self.devRTT = 0.75 * self.devRTT + 0.25 * abs(sampleRTT - self.estimatedRTT)     # pg. 240
-        self.timeoutinterval = self.estimatedRTT + 4 * self.devRTT
+        if self.estimatedRTT == 0:  # First sampleRTT
+            self.estimatedRTT = sampleRTT       
+            self.devRTT = sampleRTT/2
+            self.timeoutinterval = self.estimatedRTT + 4 * self.devRTT
+        else:   # Every subsequent sampleRTT
+            self.devRTT = 0.75 * self.devRTT + 0.25 * abs(sampleRTT - self.estimatedRTT)     # pg. 240
+            self.estimatedRTT = 0.875 * self.estimatedRTT + 0.125 * sampleRTT   # pg. 239       
+            self.timeoutinterval = self.estimatedRTT + 4 * self.devRTT
         # print "sampleRTT", sampleRTT
         # print "estimatedRTT", self.estimatedRTT
         # print "devRTT", self.devRTT
@@ -466,6 +503,7 @@ class mysocket:
     def __sendloop(self):
         while self.threadsOpen:
             if not len(self.sendQueue) == 0 and self.lastbytesent - self.lastbyteacked <= min(self.inboundrecvwin, self.cwnd):
+                # print self.cwnd
                 pack = self.sendQueue.pop(0)
                 if pack.tcp_psh:
                     # print pack.tcp_psh, pack.tcp_ack
@@ -482,23 +520,40 @@ class mysocket:
         pack.printPacket()
         self.printlock.release()
 
+    def __timerthread(self):
+        time.sleep(self.timeoutinterval)
+        # if self.timerrunning:
+        self.__timeouthandler()
+
     def __starttimer(self):
         signal.setitimer(signal.ITIMER_REAL, self.timeoutinterval)
+        # self.timerthread = threading.Thread(target=self.__timerthread).start()
         self.timerrunning = True
+        # print "Timer started with timeout at " , self.timeoutinterval
 
     def __stoptimer(self):
-        signal.alarm(0)
+        # signal.alarm(0)
+        # if self.timerthread != 0:            
+        #     self.timerthread.exit()
         self.timerrunning = False
+        # print "Timer stopped"
 
-    def timeouthandler(self, signum, frame):
-        # print "Timeout!"
+    def __timeouthandler(self, signum, frame): # args for signals: self, signum, frame
+        printlog("TIMEOUT!")
         # print self.outboundQueue[0].tcp_psh
         # print self.outboundQueue[0].tcp_ack
         # for p in  self.outboundQueue:
             # print p.tcp_psh, p.tcp_ack
-        self.sendQueue.insert(0, self.outboundQueue[0])
-        self.timeoutinterval *= 2
-        self.__starttimer()
+        self.ccmode = "ss"
+        self.ssthresh = self.cwnd/2
+        self.cwnd = self.mss
+        self.duplicateacks = 0
+
+        if len(self.outboundQueue) != 0:
+            self.sendQueue.insert(0, self.outboundQueue[0])
+            self.timeoutinterval *= 2
+            self.__starttimer()
+            printlog("Retransmitting packet")
         # raise Exception("Timeout!")
 
 class packet:
@@ -635,10 +690,10 @@ class packet:
 
         if calulatedcheck == self.tcp_check:
             self.correctchecksum = True
-            printlog("checksum correct")
+            # printlog("checksum correct")
         else:
             self.correctchecksum = False
-            printlog("checksum incorrect")
+            # printlog("checksum incorrect")
 
 
     def printPacket(self):
@@ -699,67 +754,8 @@ class packet:
 
         # print "data:", self.user_data
         
-
-
-
-# if pack("H",1) == "\x00\x01": # big endian
-#     def checksum(pkt):
-#         if len(pkt) % 2 == 1:
-#             pkt += "\0"
-#         s = sum(array.array("H", pkt))
-#         s = (s >> 16) + (s & 0xffff)
-#         s += s >> 16
-#         s = ~s
-#         return s & 0xffff
-# else:
-#     def checksum(pkt):
-#         if len(pkt) % 2 == 1:
-#             pkt += "\0"
-#         s = sum(array.array("H", pkt))
-#         s = (s >> 16) + (s & 0xffff)
-#         s += s >> 16
-#         s = ~s
-#         return (((s>>8)&0xff)|s<<8) & 0xffff
-
-# def carry_around_add(a, b):
-#     c = a + b
-#     return (c & 0xffff) + (c >> 16)
-
-# def checksum(msg):    # <- Use this one
-#     s = 0
-#     for i in range(0, len(msg), 2):
-#         w = ord(msg[i]) + (ord(msg[i+1]) << 8)
-#         s = carry_around_add(s, w)
-#     return ~s & 0xffff
-
-# def checksum(pkt):  # <- This one works too
-#     if len(pkt) % 2 == 1:
-#         pkt += "\0"
-#     s = sum(array.array("H", pkt))
-#     s = (s >> 16) + (s & 0xffff)
-#     s += s >> 16
-#     s = ~s
-#     return s & 0xffff
-
-# needed for calculation checksum
-# def checksum(msg):
-#     s = 0
-     
-#     # loop taking 2 characters at a time
-#     for i in range(0, len(msg), 2):
-#         w = ord(msg[i]) + (ord(msg[i+1]) << 8 )
-#         s = s + w
-     
-#     s = (s>>16) + (s & 0xffff);
-#     s = s + (s >> 16);
-     
-#     #complement and mask to 4 byte short
-#     s = ~s & 0xffff
-     
-#     return s
- 
+# debug = False
 debug = False
-# debug = True
 def printlog(s):
     if debug:
         print s
